@@ -1,0 +1,669 @@
+using System.Drawing;
+
+namespace Shigure;
+
+/// <summary>
+/// 动态单位 / 数量字段的编辑弹窗: 选择类别(单位/数量)与选择器, 按所选类型动态显隐参数控件。
+/// 光环候选来自当前职业/专精的 group 字段。校验名称非空、唯一、非纯数字、不含 '.'/'$'。
+/// </summary>
+public sealed class UnitEditorForm : Form
+{
+    private const int RowWidth = 392;
+
+    private static readonly RoleOption[] RoleOptions =
+    [
+        new("坦克 (1)", 1),
+        new("治疗 (2)", 2),
+        new("输出 (3)", 3)
+    ];
+
+    private static readonly SelectorItem[] UnitSelectors =
+    [
+        new("生命值最低", UnitSelectorKind.LowestHealth),
+        new("带任一光环且血最低", UnitSelectorKind.LowestHealthWithAnyAura),
+        new("不带某光环且血最低", UnitSelectorKind.LowestHealthWithoutAura),
+        new("带某光环且血最低", UnitSelectorKind.LowestHealthWithAura),
+        new("光环层数等于某值且血最低", UnitSelectorKind.LowestHealthWithAuraCount),
+        new("按职责", UnitSelectorKind.UnitWithRole),
+        new("按职责且不带某光环", UnitSelectorKind.UnitWithRoleWithoutAura),
+        new("带某光环(持续最久)", UnitSelectorKind.UnitWithAura),
+        new("带某驱散类型", UnitSelectorKind.UnitWithDispelType)
+    ];
+
+    private static readonly CountItem[] CountSelectors =
+    [
+        new("低于阈值的人数", CountKind.UnitsBelowHealth),
+        new("不带某光环且低血的人数", CountKind.UnitsWithoutAuraBelowHealth),
+        new("拥有某光环的人数", CountKind.UnitsWithAura)
+    ];
+
+    private readonly IReadOnlyList<string> _auraFields;
+    private readonly HashSet<string> _takenNames;
+
+    private readonly TextBox _nameBox = new();
+    private readonly ComboBox _categoryBox = new();
+    private readonly ComboBox _selectorBox = new();
+    private readonly FlowLayoutPanel _paramPanel = new();
+
+    private readonly NumericUpDown _thresholdBox = new();
+    private readonly ComboBox _roleBox = new();
+    private readonly CheckBox _reverseBox = new();
+    private readonly ComboBox _auraBox = new();
+    private readonly CheckedListBox _aurasBox = new();
+    private readonly NumericUpDown _auraCountBox = new();
+    private readonly NumericUpDown _dispelTypeBox = new();
+
+    private Panel _thresholdRow = null!;
+    private Panel _roleRow = null!;
+    private Panel _reverseRow = null!;
+    private Panel _auraRow = null!;
+    private Panel _aurasRow = null!;
+    private Panel _auraCountRow = null!;
+    private Panel _dispelRow = null!;
+
+    public ModuleUnit? ResultUnit { get; private set; }
+    public ModuleCountField? ResultCount { get; private set; }
+
+    public UnitEditorForm(
+        IReadOnlyList<string> auraFields,
+        IReadOnlyCollection<string> takenNames,
+        ModuleUnit? existingUnit,
+        ModuleCountField? existingCount)
+    {
+        _auraFields = auraFields;
+        _takenNames = new HashSet<string>(takenNames, StringComparer.OrdinalIgnoreCase);
+        InitializeComponent();
+        Seed(existingUnit, existingCount);
+        UpdateParamVisibility();
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        UiTheme.ApplyDarkTitleBar(this);
+    }
+
+    private void InitializeComponent()
+    {
+        Text = "编辑单位";
+        Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        BackColor = UiTheme.Surface;
+        ForeColor = UiTheme.Text;
+        ClientSize = new Size(RowWidth + 36, 430);
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.CenterParent;
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = UiTheme.Surface,
+            Padding = new Padding(14, 12, 14, 12),
+            ColumnCount = 1,
+            RowCount = 4
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        Controls.Add(root);
+
+        UiTheme.StyleComboBox(_categoryBox);
+        _categoryBox.Items.AddRange(["单位 (可作目标)", "数量 (仅条件)"]);
+        _categoryBox.SelectedIndex = 0;
+        _categoryBox.SelectedIndexChanged += (_, _) =>
+        {
+            PopulateSelectors();
+            UpdateParamVisibility();
+        };
+
+        UiTheme.StyleComboBox(_selectorBox);
+        _selectorBox.SelectedIndexChanged += (_, _) => UpdateParamVisibility();
+
+        root.Controls.Add(BuildLabeledRow("名称", StyleTextBox(_nameBox)), 0, 0);
+        root.Controls.Add(BuildSplitRow("类别", _categoryBox, "选择器", _selectorBox), 0, 1);
+
+        _paramPanel.Dock = DockStyle.Fill;
+        _paramPanel.BackColor = UiTheme.Surface;
+        _paramPanel.FlowDirection = FlowDirection.TopDown;
+        _paramPanel.WrapContents = false;
+        _paramPanel.AutoScroll = true;
+        _paramPanel.Margin = new Padding(0, 8, 0, 0);
+        BuildParamRows();
+        root.Controls.Add(_paramPanel, 0, 2);
+
+        root.Controls.Add(BuildActionRow(), 0, 3);
+
+        PopulateSelectors();
+    }
+
+    private void BuildParamRows()
+    {
+        _thresholdBox.Minimum = 1;
+        _thresholdBox.Maximum = 100;
+        _thresholdBox.Value = 100;
+        StyleNumeric(_thresholdBox);
+
+        UiTheme.StyleComboBox(_roleBox);
+        _roleBox.Items.AddRange(RoleOptions.Cast<object>().ToArray());
+        _roleBox.SelectedIndex = 0;
+
+        _reverseBox.Text = "取逆序最后一个匹配单位";
+        _reverseBox.ForeColor = UiTheme.Text;
+        _reverseBox.BackColor = UiTheme.Surface;
+        _reverseBox.AutoSize = true;
+
+        UiTheme.StyleComboBox(_auraBox);
+        foreach (var aura in _auraFields)
+        {
+            _auraBox.Items.Add(aura);
+        }
+
+        if (_auraBox.Items.Count > 0)
+        {
+            _auraBox.SelectedIndex = 0;
+        }
+
+        _aurasBox.BackColor = UiTheme.Field;
+        _aurasBox.ForeColor = UiTheme.Text;
+        _aurasBox.BorderStyle = BorderStyle.FixedSingle;
+        _aurasBox.CheckOnClick = true;
+        _aurasBox.IntegralHeight = false;
+        foreach (var aura in _auraFields)
+        {
+            _aurasBox.Items.Add(aura);
+        }
+
+        _auraCountBox.Minimum = 0;
+        _auraCountBox.Maximum = 100;
+        _auraCountBox.Value = 1;
+        StyleNumeric(_auraCountBox);
+
+        _dispelTypeBox.Minimum = 0;
+        _dispelTypeBox.Maximum = 100;
+        _dispelTypeBox.Value = 1;
+        StyleNumeric(_dispelTypeBox);
+
+        _thresholdRow = BuildLabeledRow("血量阈值 (<)", _thresholdBox);
+        _roleRow = BuildLabeledRow("职责", _roleBox);
+        _reverseRow = BuildLabeledRow(string.Empty, _reverseBox);
+        _auraRow = BuildLabeledRow("光环", _auraBox);
+        _aurasRow = BuildLabeledRow("光环 (可多选)", _aurasBox, 92);
+        _auraCountRow = BuildLabeledRow("光环层数 =", _auraCountBox);
+        _dispelRow = BuildLabeledRow("驱散类型", _dispelTypeBox);
+
+        _paramPanel.Controls.AddRange([_thresholdRow, _roleRow, _reverseRow, _auraRow, _aurasRow, _auraCountRow, _dispelRow]);
+    }
+
+    private Control BuildActionRow()
+    {
+        var row = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            BackColor = UiTheme.Surface,
+            Margin = new Padding(0)
+        };
+
+        var okButton = UiTheme.CreateButton("确定", UiTheme.Accent, Color.Black);
+        okButton.Width = 76;
+        okButton.Height = 30;
+        okButton.Margin = new Padding(6, 6, 0, 0);
+        okButton.Click += (_, _) => OnConfirm();
+
+        var cancelButton = UiTheme.CreateButton("取消", UiTheme.Field, UiTheme.Text);
+        cancelButton.Width = 76;
+        cancelButton.Height = 30;
+        cancelButton.Margin = new Padding(6, 6, 0, 0);
+        cancelButton.Click += (_, _) => DialogResult = DialogResult.Cancel;
+
+        row.Controls.Add(okButton);
+        row.Controls.Add(cancelButton);
+        CancelButton = cancelButton;
+        return row;
+    }
+
+    private void PopulateSelectors()
+    {
+        _selectorBox.Items.Clear();
+        if (IsCountCategory)
+        {
+            _selectorBox.Items.AddRange(CountSelectors.Cast<object>().ToArray());
+        }
+        else
+        {
+            _selectorBox.Items.AddRange(UnitSelectors.Cast<object>().ToArray());
+        }
+
+        if (_selectorBox.Items.Count > 0)
+        {
+            _selectorBox.SelectedIndex = 0;
+        }
+    }
+
+    private void UpdateParamVisibility()
+    {
+        bool threshold = false, role = false, reverse = false, auraSingle = false, auraMulti = false, auraCount = false, dispel = false;
+
+        if (IsCountCategory)
+        {
+            switch ((_selectorBox.SelectedItem as CountItem)?.Kind)
+            {
+                case CountKind.UnitsBelowHealth:
+                    threshold = true;
+                    break;
+                case CountKind.UnitsWithoutAuraBelowHealth:
+                    threshold = auraSingle = true;
+                    break;
+                case CountKind.UnitsWithAura:
+                    auraSingle = true;
+                    break;
+            }
+        }
+        else
+        {
+            switch ((_selectorBox.SelectedItem as SelectorItem)?.Kind)
+            {
+                case UnitSelectorKind.LowestHealth:
+                    threshold = true;
+                    break;
+                case UnitSelectorKind.LowestHealthWithAnyAura:
+                    threshold = auraMulti = true;
+                    break;
+                case UnitSelectorKind.LowestHealthWithoutAura:
+                case UnitSelectorKind.LowestHealthWithAura:
+                    threshold = auraSingle = true;
+                    break;
+                case UnitSelectorKind.LowestHealthWithAuraCount:
+                    threshold = auraSingle = auraCount = true;
+                    break;
+                case UnitSelectorKind.UnitWithRole:
+                    role = reverse = true;
+                    break;
+                case UnitSelectorKind.UnitWithRoleWithoutAura:
+                    role = reverse = auraSingle = true;
+                    break;
+                case UnitSelectorKind.UnitWithAura:
+                    auraSingle = true;
+                    break;
+                case UnitSelectorKind.UnitWithDispelType:
+                    dispel = true;
+                    break;
+            }
+        }
+
+        _thresholdRow.Visible = threshold;
+        _roleRow.Visible = role;
+        _reverseRow.Visible = reverse;
+        _auraRow.Visible = auraSingle;
+        _aurasRow.Visible = auraMulti;
+        _auraCountRow.Visible = auraCount;
+        _dispelRow.Visible = dispel;
+    }
+
+    private void Seed(ModuleUnit? unit, ModuleCountField? count)
+    {
+        if (count is not null)
+        {
+            _nameBox.Text = count.Name;
+            _categoryBox.SelectedIndex = 1;
+            PopulateSelectors();
+            SelectSelector(count.Kind);
+            if (count.HealthThreshold is { } th)
+            {
+                _thresholdBox.Value = Clamp(th, _thresholdBox);
+            }
+
+            SelectAura(_auraBox, count.AuraName);
+            return;
+        }
+
+        if (unit is not null)
+        {
+            _nameBox.Text = unit.Name;
+            _categoryBox.SelectedIndex = 0;
+            PopulateSelectors();
+            SelectSelector(unit.Kind);
+            if (unit.HealthThreshold is { } th)
+            {
+                _thresholdBox.Value = Clamp(th, _thresholdBox);
+            }
+
+            if (unit.Role is { } r)
+            {
+                SelectRole(r);
+            }
+
+            _reverseBox.Checked = unit.Reverse;
+            SelectAura(_auraBox, unit.AuraNames is { Count: > 0 } ? unit.AuraNames[0] : null);
+            CheckAuras(unit.AuraNames);
+            if (unit.AuraCount is { } ac)
+            {
+                _auraCountBox.Value = Clamp(ac, _auraCountBox);
+            }
+
+            if (unit.DispelType is { } dt)
+            {
+                _dispelTypeBox.Value = Clamp(dt, _dispelTypeBox);
+            }
+        }
+    }
+
+    private void OnConfirm()
+    {
+        var name = _nameBox.Text.Trim();
+        if (!ValidateName(name, out var message))
+        {
+            MessageBox.Show(message, "Shigure", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (IsCountCategory)
+        {
+            var kind = (_selectorBox.SelectedItem as CountItem)?.Kind ?? CountKind.UnitsBelowHealth;
+            var count = new ModuleCountField { Name = name, Kind = kind };
+            switch (kind)
+            {
+                case CountKind.UnitsBelowHealth:
+                    count.HealthThreshold = (int)_thresholdBox.Value;
+                    break;
+                case CountKind.UnitsWithoutAuraBelowHealth:
+                    count.HealthThreshold = (int)_thresholdBox.Value;
+                    count.AuraName = SelectedAura();
+                    break;
+                case CountKind.UnitsWithAura:
+                    count.AuraName = SelectedAura();
+                    break;
+            }
+
+            if (RequiresAura(kind) && string.IsNullOrEmpty(count.AuraName))
+            {
+                MessageBox.Show("请选择光环。", "Shigure", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            ResultCount = count;
+            DialogResult = DialogResult.OK;
+            return;
+        }
+
+        var unitKind = (_selectorBox.SelectedItem as SelectorItem)?.Kind ?? UnitSelectorKind.LowestHealth;
+        var moduleUnit = new ModuleUnit { Name = name, Kind = unitKind };
+        switch (unitKind)
+        {
+            case UnitSelectorKind.LowestHealth:
+                moduleUnit.HealthThreshold = (int)_thresholdBox.Value;
+                break;
+            case UnitSelectorKind.LowestHealthWithAnyAura:
+                moduleUnit.HealthThreshold = (int)_thresholdBox.Value;
+                moduleUnit.AuraNames = CheckedAuras();
+                if (moduleUnit.AuraNames.Count == 0)
+                {
+                    MessageBox.Show("请至少勾选一个光环。", "Shigure", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                break;
+            case UnitSelectorKind.LowestHealthWithoutAura:
+            case UnitSelectorKind.LowestHealthWithAura:
+                moduleUnit.HealthThreshold = (int)_thresholdBox.Value;
+                moduleUnit.AuraNames = SingleAuraList();
+                break;
+            case UnitSelectorKind.LowestHealthWithAuraCount:
+                moduleUnit.HealthThreshold = (int)_thresholdBox.Value;
+                moduleUnit.AuraNames = SingleAuraList();
+                moduleUnit.AuraCount = (int)_auraCountBox.Value;
+                break;
+            case UnitSelectorKind.UnitWithRole:
+                moduleUnit.Role = SelectedRole();
+                moduleUnit.Reverse = _reverseBox.Checked;
+                break;
+            case UnitSelectorKind.UnitWithRoleWithoutAura:
+                moduleUnit.Role = SelectedRole();
+                moduleUnit.Reverse = _reverseBox.Checked;
+                moduleUnit.AuraNames = SingleAuraList();
+                break;
+            case UnitSelectorKind.UnitWithAura:
+                moduleUnit.AuraNames = SingleAuraList();
+                break;
+            case UnitSelectorKind.UnitWithDispelType:
+                moduleUnit.DispelType = (int)_dispelTypeBox.Value;
+                break;
+        }
+
+        if (UnitRequiresAura(unitKind) && (moduleUnit.AuraNames is null || moduleUnit.AuraNames.Count == 0))
+        {
+            MessageBox.Show("请选择光环。", "Shigure", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        ResultUnit = moduleUnit;
+        DialogResult = DialogResult.OK;
+    }
+
+    private bool ValidateName(string name, out string message)
+    {
+        message = string.Empty;
+        if (name.Length == 0)
+        {
+            message = "名称不能为空。";
+            return false;
+        }
+
+        if (name.Contains('.') || name.Contains('$'))
+        {
+            message = "名称不能包含 '.' 或 '$'。";
+            return false;
+        }
+
+        if (int.TryParse(name, out _))
+        {
+            message = "名称不能是纯数字(会与单位编号混淆)。";
+            return false;
+        }
+
+        if (_takenNames.Contains(name))
+        {
+            message = $"名称“{name}”已被其它单位/字段或状态字段占用。";
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool IsCountCategory => _categoryBox.SelectedIndex == 1;
+
+    private static bool RequiresAura(CountKind kind)
+        => kind is CountKind.UnitsWithoutAuraBelowHealth or CountKind.UnitsWithAura;
+
+    private static bool UnitRequiresAura(UnitSelectorKind kind)
+        => kind is UnitSelectorKind.LowestHealthWithoutAura
+            or UnitSelectorKind.LowestHealthWithAura
+            or UnitSelectorKind.LowestHealthWithAuraCount
+            or UnitSelectorKind.UnitWithRoleWithoutAura
+            or UnitSelectorKind.UnitWithAura;
+
+    private string? SelectedAura() => _auraBox.SelectedItem?.ToString();
+
+    private List<string> SingleAuraList()
+    {
+        var aura = SelectedAura();
+        return string.IsNullOrEmpty(aura) ? new List<string>() : new List<string> { aura };
+    }
+
+    private List<string> CheckedAuras()
+    {
+        var list = new List<string>();
+        foreach (var item in _aurasBox.CheckedItems)
+        {
+            if (item?.ToString() is { Length: > 0 } name)
+            {
+                list.Add(name);
+            }
+        }
+
+        return list;
+    }
+
+    private int SelectedRole() => (_roleBox.SelectedItem as RoleOption)?.Value ?? 1;
+
+    private void SelectSelector(UnitSelectorKind kind)
+    {
+        for (var i = 0; i < _selectorBox.Items.Count; i++)
+        {
+            if (_selectorBox.Items[i] is SelectorItem item && item.Kind == kind)
+            {
+                _selectorBox.SelectedIndex = i;
+                return;
+            }
+        }
+    }
+
+    private void SelectSelector(CountKind kind)
+    {
+        for (var i = 0; i < _selectorBox.Items.Count; i++)
+        {
+            if (_selectorBox.Items[i] is CountItem item && item.Kind == kind)
+            {
+                _selectorBox.SelectedIndex = i;
+                return;
+            }
+        }
+    }
+
+    private void SelectRole(int role)
+    {
+        for (var i = 0; i < _roleBox.Items.Count; i++)
+        {
+            if (_roleBox.Items[i] is RoleOption option && option.Value == role)
+            {
+                _roleBox.SelectedIndex = i;
+                return;
+            }
+        }
+    }
+
+    private static void SelectAura(ComboBox box, string? aura)
+    {
+        if (string.IsNullOrEmpty(aura))
+        {
+            return;
+        }
+
+        var index = box.Items.IndexOf(aura);
+        if (index < 0)
+        {
+            box.Items.Add(aura);
+            index = box.Items.Count - 1;
+        }
+
+        box.SelectedIndex = index;
+    }
+
+    private void CheckAuras(List<string>? auras)
+    {
+        if (auras is null)
+        {
+            return;
+        }
+
+        foreach (var aura in auras)
+        {
+            var index = _aurasBox.Items.IndexOf(aura);
+            if (index < 0)
+            {
+                index = _aurasBox.Items.Add(aura);
+            }
+
+            _aurasBox.SetItemChecked(index, true);
+        }
+    }
+
+    private static decimal Clamp(int value, NumericUpDown box)
+    {
+        return Math.Clamp(value, (int)box.Minimum, (int)box.Maximum);
+    }
+
+    private static Panel BuildLabeledRow(string label, Control control, int height = 32)
+    {
+        var panel = new Panel
+        {
+            Width = RowWidth,
+            Height = height,
+            BackColor = UiTheme.Surface,
+            Margin = new Padding(0, 2, 0, 2)
+        };
+
+        var labelControl = new Label
+        {
+            Text = label,
+            ForeColor = UiTheme.Muted,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Bounds = new Rectangle(0, 4, 120, 24)
+        };
+
+        control.Bounds = new Rectangle(126, 3, RowWidth - 126, height - 6);
+        panel.Controls.Add(control);
+        panel.Controls.Add(labelControl);
+        return panel;
+    }
+
+    private Control BuildSplitRow(string labelA, Control controlA, string labelB, Control controlB)
+    {
+        var panel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = UiTheme.Surface,
+            Margin = new Padding(0)
+        };
+
+        var labelAControl = new Label { Text = labelA, ForeColor = UiTheme.Muted, TextAlign = ContentAlignment.MiddleLeft, Bounds = new Rectangle(0, 4, 44, 24) };
+        controlA.Bounds = new Rectangle(46, 3, 150, 26);
+        var labelBControl = new Label { Text = labelB, ForeColor = UiTheme.Muted, TextAlign = ContentAlignment.MiddleLeft, Bounds = new Rectangle(208, 4, 50, 24) };
+        controlB.Bounds = new Rectangle(258, 3, RowWidth - 258, 26);
+
+        panel.Controls.Add(controlA);
+        panel.Controls.Add(labelAControl);
+        panel.Controls.Add(controlB);
+        panel.Controls.Add(labelBControl);
+        return panel;
+    }
+
+    private static Control BuildLabeledRow(string label, TextBox control)
+    {
+        return BuildLabeledRow(label, (Control)control);
+    }
+
+    private static TextBox StyleTextBox(TextBox box)
+    {
+        box.BackColor = UiTheme.Field;
+        box.ForeColor = UiTheme.Text;
+        box.BorderStyle = BorderStyle.FixedSingle;
+        return box;
+    }
+
+    private static void StyleNumeric(NumericUpDown box)
+    {
+        box.BackColor = UiTheme.Field;
+        box.ForeColor = UiTheme.Text;
+        box.BorderStyle = BorderStyle.FixedSingle;
+    }
+
+    private sealed record SelectorItem(string Text, UnitSelectorKind Kind)
+    {
+        public override string ToString() => Text;
+    }
+
+    private sealed record CountItem(string Text, CountKind Kind)
+    {
+        public override string ToString() => Text;
+    }
+
+    private sealed record RoleOption(string Text, int Value)
+    {
+        public override string ToString() => Text;
+    }
+}

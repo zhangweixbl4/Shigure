@@ -1,0 +1,102 @@
+namespace Shigure;
+
+/// <summary>
+/// 动态单位选择器类型, 对应 utils.py 中返回单位槽位的函数。
+/// </summary>
+public enum UnitSelectorKind
+{
+    /// <summary>生命值最低的单位。get_lowest_health_unit</summary>
+    LowestHealth,
+
+    /// <summary>拥有任一光环且生命值最低。get_lowest_health_unit_with_any_aura</summary>
+    LowestHealthWithAnyAura,
+
+    /// <summary>不带某光环且生命值最低。get_lowest_health_unit_without_aura</summary>
+    LowestHealthWithoutAura,
+
+    /// <summary>带某光环且生命值最低。get_lowest_health_unit_with_aura</summary>
+    LowestHealthWithAura,
+
+    /// <summary>某光环层数等于指定值且生命值最低。get_lowest_health_unit_with_aura_count</summary>
+    LowestHealthWithAuraCount,
+
+    /// <summary>按职责取首个/逆序首个。get_unit_with_role</summary>
+    UnitWithRole,
+
+    /// <summary>按职责且不带某光环取首个/逆序首个。get_unit_with_role_and_without_aura_name</summary>
+    UnitWithRoleWithoutAura,
+
+    /// <summary>带某光环(取持续最久)。get_unit_with_aura</summary>
+    UnitWithAura,
+
+    /// <summary>带某驱散类型的首个单位。get_unit_with_dispel_type</summary>
+    UnitWithDispelType
+}
+
+/// <summary>
+/// 模块内定义的命名动态单位。运行时由 <see cref="UnitSelector"/> 解析为 group 槽位("1".."30")。
+/// 单光环类用 AuraNames[0]; WithAnyAura 用整个列表。
+/// </summary>
+public sealed class ModuleUnit
+{
+    public string Name { get; set; } = string.Empty;
+    public UnitSelectorKind Kind { get; set; } = UnitSelectorKind.LowestHealth;
+    public int? HealthThreshold { get; set; }
+    public int? Role { get; set; }
+    public bool Reverse { get; set; }
+    public List<string>? AuraNames { get; set; }
+    public int? AuraCount { get; set; }
+    public int? DispelType { get; set; }
+
+    public ModuleUnit Clone()
+    {
+        return new ModuleUnit
+        {
+            Name = Name,
+            Kind = Kind,
+            HealthThreshold = HealthThreshold,
+            Role = Role,
+            Reverse = Reverse,
+            AuraNames = AuraNames is null ? null : new List<string>(AuraNames),
+            AuraCount = AuraCount,
+            DispelType = DispelType
+        };
+    }
+}
+
+/// <summary>
+/// 数量统计类型, 对应 utils.py 中返回整数的统计函数。
+/// </summary>
+public enum CountKind
+{
+    /// <summary>生命值低于阈值的人数。count_units_below_health</summary>
+    UnitsBelowHealth,
+
+    /// <summary>不带某光环且生命值低于阈值的人数。count_units_without_aura_below_health</summary>
+    UnitsWithoutAuraBelowHealth,
+
+    /// <summary>拥有某光环的人数。count_units_with_aura</summary>
+    UnitsWithAura
+}
+
+/// <summary>
+/// 模块内定义的命名数量字段。仅用于条件(如 低血量人数 &gt;= 3), 不能作为目标。
+/// </summary>
+public sealed class ModuleCountField
+{
+    public string Name { get; set; } = string.Empty;
+    public CountKind Kind { get; set; } = CountKind.UnitsBelowHealth;
+    public int? HealthThreshold { get; set; }
+    public string? AuraName { get; set; }
+
+    public ModuleCountField Clone()
+    {
+        return new ModuleCountField
+        {
+            Name = Name,
+            Kind = Kind,
+            HealthThreshold = HealthThreshold,
+            AuraName = AuraName
+        };
+    }
+}

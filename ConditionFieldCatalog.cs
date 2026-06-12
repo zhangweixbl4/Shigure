@@ -82,6 +82,41 @@ public sealed class ConditionFieldCatalog
         return fields;
     }
 
+    /// <summary>
+    /// 返回指定职业/专精下 group 队伍成员的字段(生命值/职责/驱散 + 该专精光环字段), 带类型。
+    /// 供动态单位编辑器选择光环、以及条件编辑器构造 单位.字段 选项使用。
+    /// </summary>
+    public IReadOnlyList<ConditionField> GetGroupFields(int? classId, int? specId)
+    {
+        var fields = new List<ConditionField>();
+        if (_config is null)
+        {
+            return fields;
+        }
+
+        var stateConfig = _config.BuildStateConfig(classId, specId);
+        if (JsonHelpers.Get(stateConfig, "group") is not JsonObject group)
+        {
+            return fields;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (key, node) in group)
+        {
+            if (key is "start" or "num")
+            {
+                continue;
+            }
+
+            if (node is JsonObject field && field.ContainsKey("step") && seen.Add(key))
+            {
+                fields.Add(new ConditionField(key, key, ReadType(field)));
+            }
+        }
+
+        return fields;
+    }
+
     private static void AddField(
         List<ConditionField> fields,
         HashSet<string> seen,

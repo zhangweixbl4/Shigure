@@ -11,17 +11,9 @@
   "Rules": [
     {
       "Enabled": true,
-      "Condition": "蓄力层数 > 0 && 锚点 == true && 有效性 == true && 一键辅助 == 0",
+      "Condition": "生命值 >= 50 && spells.绝望祷言 == 0",
       "Unit": 0,
-      "Spell": "一键辅助",
-      "Hotkey": "",
-      "Step": ""
-    },
-    {
-      "Enabled": true,
-      "Condition": "锚点 == true && 锚点 == true",
-      "Unit": 1,
-      "Spell": "222",
+      "Spell": "绝望祷言",
       "Hotkey": "",
       "Step": ""
     }

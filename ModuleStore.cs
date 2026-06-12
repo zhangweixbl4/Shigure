@@ -12,6 +12,8 @@ public sealed class ModuleDefinition
     public string Name { get; set; } = "新模块";
     public bool Enabled { get; set; } = true;
     public ModuleMatch Match { get; set; } = new();
+    public List<ModuleUnit> Units { get; set; } = new();
+    public List<ModuleCountField> Counts { get; set; } = new();
     public List<ModuleRule> Rules { get; set; } = new();
 
     [JsonIgnore]
@@ -26,6 +28,8 @@ public sealed class ModuleDefinition
             Enabled = Enabled,
             FilePath = FilePath,
             Match = Match.Clone(),
+            Units = Units.Select(unit => unit.Clone()).ToList(),
+            Counts = Counts.Select(count => count.Clone()).ToList(),
             Rules = Rules.Select(rule => rule.Clone()).ToList()
         };
     }
@@ -172,6 +176,7 @@ public sealed class ModuleRule
     public bool Enabled { get; set; } = true;
     public string Condition { get; set; } = string.Empty;
     public int? Unit { get; set; }
+    public string? UnitName { get; set; }
     public string Spell { get; set; } = string.Empty;
     public string Hotkey { get; set; } = string.Empty;
     public string Step { get; set; } = string.Empty;
@@ -183,6 +188,7 @@ public sealed class ModuleRule
             Enabled = Enabled,
             Condition = Condition,
             Unit = Unit,
+            UnitName = UnitName,
             Spell = Spell,
             Hotkey = Hotkey,
             Step = Step
@@ -199,6 +205,7 @@ public sealed class ModuleStore
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Converters =
         {
+            new JsonStringEnumConverter(),
             new StringOrNumberJsonConverter()
         }
     };
@@ -393,6 +400,20 @@ public sealed class ModuleStore
 
         module.Match ??= new ModuleMatch();
         module.Match.PartyType = ModuleMatch.NormalizePartyTypeValue(module.Match.PartyType);
+        module.Units ??= new List<ModuleUnit>();
+        module.Counts ??= new List<ModuleCountField>();
+        module.Units.RemoveAll(unit => string.IsNullOrWhiteSpace(unit.Name));
+        module.Counts.RemoveAll(count => string.IsNullOrWhiteSpace(count.Name));
+        foreach (var unit in module.Units)
+        {
+            unit.Name = unit.Name.Trim();
+        }
+
+        foreach (var count in module.Counts)
+        {
+            count.Name = count.Name.Trim();
+        }
+
         module.Rules ??= new List<ModuleRule>();
     }
 
@@ -462,6 +483,9 @@ public static class ModuleLogic
     public static LogicDecision Run(ModuleDefinition module, GameState state, KeymapService keymap)
     {
         var info = CreateInfo(module, state);
+        var unitSlots = ResolveUnits(module, state);
+        ResolveCounts(module, state);
+
         foreach (var rule in module.Rules.Where(rule => rule.Enabled))
         {
             if (!ModuleConditionEvaluator.TryEvaluate(rule.Condition, state, out var conditionMatched, out var error))
@@ -476,19 +500,64 @@ public static class ModuleLogic
                 continue;
             }
 
+            var resolvedUnit = rule.Unit;
+            if (!string.IsNullOrWhiteSpace(rule.UnitName))
+            {
+                // 动态目标: 选择器没选中任何单位时跳过该规则(等同条件未命中)。
+                var slot = unitSlots.TryGetValue(rule.UnitName, out var s) ? s : null;
+                if (slot is null)
+                {
+                    continue;
+                }
+
+                resolvedUnit = int.TryParse(slot, out var slotUnit) ? slotUnit : 0;
+            }
+
             var hotkey = string.IsNullOrWhiteSpace(rule.Hotkey)
-                ? string.IsNullOrWhiteSpace(rule.Spell) ? null : keymap.GetHotkey(rule.Unit, rule.Spell)
+                ? string.IsNullOrWhiteSpace(rule.Spell) ? null : keymap.GetHotkey(resolvedUnit, rule.Spell)
                 : rule.Hotkey.Trim();
             var step = BuildStep(module, rule, hotkey);
             info["命中条件"] = string.IsNullOrWhiteSpace(rule.Condition) ? "始终" : rule.Condition;
             info["动作技能"] = string.IsNullOrWhiteSpace(rule.Spell) ? "-" : rule.Spell;
             info["动作按键"] = string.IsNullOrWhiteSpace(hotkey) ? "-" : hotkey;
-            info["动作单位"] = rule.Unit.GetValueOrDefault();
+            info["动作单位"] = string.IsNullOrWhiteSpace(rule.UnitName)
+                ? resolvedUnit.GetValueOrDefault()
+                : $"{rule.UnitName} → {resolvedUnit.GetValueOrDefault()}";
             return new LogicDecision(hotkey, step, info, module.Name);
         }
 
         info["命中条件"] = "-";
         return new LogicDecision(null, $"{module.Name}: 无匹配规则", info, module.Name);
+    }
+
+    // 把模块定义的动态单位/数量各解析一次, 写入当前帧 state.Values 供条件求值与目标解析使用。
+    private static Dictionary<string, string?> ResolveUnits(ModuleDefinition module, GameState state)
+    {
+        var unitSlots = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var unit in module.Units)
+        {
+            if (!string.IsNullOrWhiteSpace(unit.Name))
+            {
+                unitSlots[unit.Name] = UnitSelector.Resolve(unit, state);
+            }
+        }
+
+        state.Values["$units"] = unitSlots;
+        return unitSlots;
+    }
+
+    private static void ResolveCounts(ModuleDefinition module, GameState state)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var count in module.Counts)
+        {
+            if (!string.IsNullOrWhiteSpace(count.Name))
+            {
+                counts[count.Name] = UnitSelector.Resolve(count, state);
+            }
+        }
+
+        state.Values["$counts"] = counts;
     }
 
     private static Dictionary<string, object?> CreateInfo(ModuleDefinition module, GameState state)
@@ -627,6 +696,43 @@ public static class ModuleConditionEvaluator
             return null;
         }
 
+        // 数量字段(整名匹配): 如 低血量人数。
+        if (state.Values.TryGetValue("$counts", out var countsObj)
+            && countsObj is Dictionary<string, int> counts
+            && counts.TryGetValue(key, out var countValue))
+        {
+            return countValue;
+        }
+
+        // 动态单位字段引用: <单位名>.<字段>, 解析槽位后读 group[槽位][字段]; 单位未解析返回 null。
+        var dot = key.IndexOf('.');
+        if (dot > 0
+            && state.Values.TryGetValue("$units", out var unitsObj)
+            && unitsObj is Dictionary<string, string?> units)
+        {
+            var unitName = key[..dot];
+            if (units.TryGetValue(unitName, out var slot))
+            {
+                if (slot is null)
+                {
+                    return null;
+                }
+
+                var field = key[(dot + 1)..];
+                return state.Group.TryGetValue(slot, out var member) && member.TryGetValue(field, out var value)
+                    ? value
+                    : null;
+            }
+        }
+
+        // 裸单位名作为存在性布尔: 解析到槽位即 true。
+        if (state.Values.TryGetValue("$units", out var unitsObj2)
+            && unitsObj2 is Dictionary<string, string?> units2
+            && units2.TryGetValue(key, out var bareSlot))
+        {
+            return bareSlot is not null;
+        }
+
         return state.GetValue(key);
     }
 
@@ -674,8 +780,9 @@ public static class ModuleConditionEvaluator
             return true;
         }
 
-        error = $"无法比较: {FormatComparable(left)} {op} {FormatComparable(right)}";
-        return false;
+        // 关系比较(> < >= <=)遇到非数字/缺失值(如未解析的动态单位字段)时不报错, 视为不命中, 继续判断下一条规则。
+        matched = false;
+        return true;
     }
 
     private static bool IsTruthy(object? value)

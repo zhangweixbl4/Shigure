@@ -46,6 +46,21 @@ public sealed class KeymapCatalog
         return GetEntries(classId).Units;
     }
 
+    /// <summary>
+    /// 指定技能在该职业 keymap 中实际配置过的 unit 编号(去重升序)。
+    /// 技能为空时返回该职业全部 unit; 技能不在 keymap 中时返回空列表。
+    /// </summary>
+    public IReadOnlyList<int> GetUnitsForSpell(int? classId, string? spell)
+    {
+        var entries = GetEntries(classId);
+        if (string.IsNullOrEmpty(spell))
+        {
+            return entries.Units;
+        }
+
+        return entries.UnitsBySpell.TryGetValue(spell, out var units) ? units : [];
+    }
+
     private KeymapEntries GetEntries(int? classId)
     {
         var path = ResolveKeymapPath(classId);
@@ -88,6 +103,7 @@ public sealed class KeymapCatalog
     {
         var spells = new List<string>();
         var units = new List<int>();
+        var unitsBySpell = new Dictionary<string, List<int>>(StringComparer.Ordinal);
         try
         {
             var root = JsonNode.Parse(File.ReadAllText(path), documentOptions: new JsonDocumentOptions
@@ -131,9 +147,24 @@ public sealed class KeymapCatalog
                 {
                     units.Add(unit);
                 }
+
+                if (!unitsBySpell.TryGetValue(spell, out var spellUnits))
+                {
+                    spellUnits = new List<int>();
+                    unitsBySpell[spell] = spellUnits;
+                }
+
+                if (!spellUnits.Contains(unit))
+                {
+                    spellUnits.Add(unit);
+                }
             }
 
             units.Sort();
+            foreach (var spellUnits in unitsBySpell.Values)
+            {
+                spellUnits.Sort();
+            }
         }
         catch
         {
@@ -141,11 +172,20 @@ public sealed class KeymapCatalog
             return KeymapEntries.Empty;
         }
 
-        return new KeymapEntries(spells, units);
+        return new KeymapEntries(
+            spells,
+            units,
+            unitsBySpell.ToDictionary(kvp => kvp.Key, kvp => (IReadOnlyList<int>)kvp.Value, StringComparer.Ordinal));
     }
 
-    private sealed record KeymapEntries(IReadOnlyList<string> Spells, IReadOnlyList<int> Units)
+    private sealed record KeymapEntries(
+        IReadOnlyList<string> Spells,
+        IReadOnlyList<int> Units,
+        IReadOnlyDictionary<string, IReadOnlyList<int>> UnitsBySpell)
     {
-        public static readonly KeymapEntries Empty = new([], []);
+        public static readonly KeymapEntries Empty = new(
+            [],
+            [],
+            new Dictionary<string, IReadOnlyList<int>>(StringComparer.Ordinal));
     }
 }

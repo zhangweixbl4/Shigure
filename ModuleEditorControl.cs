@@ -18,9 +18,15 @@ public sealed class ModuleEditorControl : UserControl
     private readonly DataGridView _rulesGrid = new();
     private readonly DataGridViewComboBoxColumn _spellColumn = new();
     private readonly DataGridViewComboBoxColumn _unitColumn = new();
+    private readonly ListView _unitsList = new();
     private readonly Label _pathLabel = new();
     private List<ModuleDefinition> _modules = new();
     private ModuleDefinition? _selectedModule;
+    // 当前编辑中模块的动态单位/数量字段(含未保存的新增), 供目标下拉与条件字段使用。
+    private readonly List<ModuleUnit> _units = new();
+    private readonly List<ModuleCountField> _counts = new();
+    // 程序化恢复列宽时置真, 避免 ColumnWidthChanged 把默认值回写覆盖用户保存的宽度。
+    private bool _suppressColumnSave;
     private static readonly PartyTypeOption[] PartyTypeOptions =
     [
         new("任意 (*)", null),
@@ -29,6 +35,8 @@ public sealed class ModuleEditorControl : UserControl
         new("队伍 (46)", "46")
     ];
     private static readonly MatchOption[] ClassOptions = BuildClassOptions();
+    // 这三列固定宽度并缓存; "条件"列为 Fill, 不缓存。
+    private static readonly string[] FixedWidthColumns = ["Enabled", "Spell", "Unit"];
 
     public ModuleEditorControl(ModuleStore moduleStore, Action runtimeRestartRequested, string baseDirectory)
     {
@@ -118,18 +126,98 @@ public sealed class ModuleEditorControl : UserControl
             BackColor = UiTheme.Surface,
             Padding = new Padding(8, 0, 0, 0),
             ColumnCount = 1,
-            RowCount = 4
+            RowCount = 5
         };
         editor.RowStyles.Add(new RowStyle(SizeType.Absolute, 74));
         editor.RowStyles.Add(new RowStyle(SizeType.Absolute, 74));
+        editor.RowStyles.Add(new RowStyle(SizeType.Absolute, 128));
         editor.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         editor.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
 
         editor.Controls.Add(BuildNameRow(), 0, 0);
         editor.Controls.Add(BuildMatchRow(), 0, 1);
-        editor.Controls.Add(BuildRulesGrid(), 0, 2);
-        editor.Controls.Add(BuildActionRow(), 0, 3);
+        editor.Controls.Add(BuildUnitsPanel(), 0, 2);
+        editor.Controls.Add(BuildRulesGrid(), 0, 3);
+        editor.Controls.Add(BuildActionRow(), 0, 4);
         return editor;
+    }
+
+    private Control BuildUnitsPanel()
+    {
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = UiTheme.Surface,
+            ColumnCount = 2,
+            RowCount = 2,
+            Margin = new Padding(0, 2, 0, 4)
+        };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var title = new Label
+        {
+            Text = "动态单位 / 数量字段（可在“目标”和“条件”中引用）",
+            Dock = DockStyle.Fill,
+            ForeColor = UiTheme.Muted,
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true
+        };
+        panel.Controls.Add(title, 0, 0);
+        panel.SetColumnSpan(title, 2);
+
+        foreach (var column in new[] { ("名称", 130), ("类型", 50), ("摘要", 240) })
+        {
+            _unitsList.Columns.Add(column.Item1, column.Item2);
+        }
+
+        _unitsList.Dock = DockStyle.Fill;
+        _unitsList.View = View.Details;
+        _unitsList.FullRowSelect = true;
+        _unitsList.MultiSelect = false;
+        _unitsList.HideSelection = false;
+        _unitsList.GridLines = false;
+        _unitsList.HeaderStyle = ColumnHeaderStyle.Nonclickable;
+        _unitsList.BackColor = UiTheme.Field;
+        _unitsList.ForeColor = UiTheme.Text;
+        _unitsList.BorderStyle = BorderStyle.None;
+        _unitsList.DoubleClick += (_, _) => EditSelectedUnit();
+        panel.Controls.Add(_unitsList, 0, 1);
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            BackColor = UiTheme.Surface,
+            Margin = new Padding(6, 0, 0, 0)
+        };
+
+        var addButton = UiTheme.CreateButton("添加", UiTheme.Field, UiTheme.Text);
+        addButton.Width = 70;
+        addButton.Height = 28;
+        addButton.Margin = new Padding(0, 0, 0, 4);
+        addButton.Click += (_, _) => AddUnit();
+
+        var editButton = UiTheme.CreateButton("编辑", UiTheme.Field, UiTheme.Text);
+        editButton.Width = 70;
+        editButton.Height = 28;
+        editButton.Margin = new Padding(0, 0, 0, 4);
+        editButton.Click += (_, _) => EditSelectedUnit();
+
+        var deleteButton = UiTheme.CreateButton("删除", UiTheme.Field, UiTheme.Danger);
+        deleteButton.Width = 70;
+        deleteButton.Height = 28;
+        deleteButton.Click += (_, _) => DeleteSelectedUnit();
+
+        buttons.Controls.Add(addButton);
+        buttons.Controls.Add(editButton);
+        buttons.Controls.Add(deleteButton);
+        panel.Controls.Add(buttons, 1, 1);
+
+        return panel;
     }
 
     private Control BuildNameRow()
@@ -225,35 +313,60 @@ public sealed class ModuleEditorControl : UserControl
         _rulesGrid.RowHeadersVisible = false;
         _rulesGrid.AllowUserToAddRows = true;
         _rulesGrid.AllowUserToDeleteRows = true;
-        _rulesGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _rulesGrid.AllowUserToResizeColumns = true;
+        _rulesGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
 
+        // 启用/技能/目标 三列宽度固定可调并缓存; 条件列用 Fill 自动充满剩余窗口。
         _rulesGrid.Columns.Add(new DataGridViewCheckBoxColumn
         {
             Name = "Enabled",
             HeaderText = "启用",
-            FillWeight = 38
+            Width = 50,
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.None
         });
         _spellColumn.Name = "Spell";
         _spellColumn.HeaderText = "技能";
-        _spellColumn.FillWeight = 120;
+        _spellColumn.Width = 150;
+        _spellColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
         _spellColumn.FlatStyle = FlatStyle.Flat;
         _rulesGrid.Columns.Add(_spellColumn);
         _unitColumn.Name = "Unit";
         _unitColumn.HeaderText = "目标";
-        _unitColumn.FillWeight = 48;
+        _unitColumn.Width = 90;
+        _unitColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
         _unitColumn.FlatStyle = FlatStyle.Flat;
         _rulesGrid.Columns.Add(_unitColumn);
         _rulesGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = "Condition",
             HeaderText = "条件 (点击编辑)",
-            FillWeight = 180,
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
             ReadOnly = true
         });
+        _rulesGrid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "Delete",
+            HeaderText = string.Empty,
+            Text = "删除",
+            UseColumnTextForButtonValue = true,
+            Width = 56,
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
+            FlatStyle = FlatStyle.Flat
+        });
         _rulesGrid.CellClick += OnRulesGridCellClick;
-        // 下拉单元格遇到不在选项里的值时不弹异常框, 由 RefreshKeymapColumns 负责补录旧值。
         _rulesGrid.DataError += (_, e) => e.ThrowException = false;
+        _rulesGrid.ColumnWidthChanged += OnColumnWidthChanged;
+        _rulesGrid.CellValueChanged += OnRulesGridCellValueChanged;
+        // 组合框改值默认要等失焦才提交; 立即提交以便"目标"随"技能"实时联动。
+        _rulesGrid.CurrentCellDirtyStateChanged += (_, _) =>
+        {
+            if (_rulesGrid.IsCurrentCellDirty && _rulesGrid.CurrentCell is DataGridViewComboBoxCell)
+            {
+                _rulesGrid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            }
+        };
         RefreshKeymapColumns();
+        ApplyColumnWidths(UiCacheStore.Load().ModuleRulesGridColumns);
 
         return _rulesGrid;
     }
@@ -274,6 +387,7 @@ public sealed class ModuleEditorControl : UserControl
             _spellColumn.Items.Add(spell);
         }
 
+        // 列级 unit 选项作为新行(尚未选技能)的默认全集; 已有行用单元格级选项按技能联动。
         _unitColumn.Items.Clear();
         _unitColumn.Items.Add(string.Empty);
         foreach (var unit in _keymapCatalog.GetUnits(classId))
@@ -289,7 +403,88 @@ public sealed class ModuleEditorControl : UserControl
             }
 
             EnsureComboItem(_spellColumn, row.Cells["Spell"].Value);
-            EnsureComboItem(_unitColumn, row.Cells["Unit"].Value);
+            UpdateUnitCellItems(row);
+        }
+    }
+
+    /// <summary>
+    /// 按该行当前选中的技能, 把"目标"单元格的可选 unit 重建为该技能在 keymap 中实际配置过的值。
+    /// 旧值若不在新选项内则补录保留; 若是技能切换导致的非法值则清空。
+    /// </summary>
+    private void UpdateUnitCellItems(DataGridViewRow row)
+    {
+        if (row.IsNewRow || row.Cells["Unit"] is not DataGridViewComboBoxCell cell)
+        {
+            return;
+        }
+
+        RebuildUnitCell(row, cell.Value?.ToString());
+    }
+
+    /// <summary>
+    /// 重建"目标"单元格选项并写入目标值。选项 = 当前技能在 keymap 中的 unit 集合。
+    /// desiredValue 合法则保留; 自定义技能(keymap 无该技能)保留旧值; 否则清空。
+    /// </summary>
+    private void RebuildUnitCell(DataGridViewRow row, string? desiredValue)
+    {
+        if (row.IsNewRow || row.Cells["Unit"] is not DataGridViewComboBoxCell cell)
+        {
+            return;
+        }
+
+        var classId = ReadMatchCombo(_classBox);
+        var spell = row.Cells["Spell"].Value?.ToString();
+        var allowed = _keymapCatalog.GetUnitsForSpell(classId, spell);
+
+        cell.Items.Clear();
+        cell.Items.Add(string.Empty);
+        foreach (var unit in allowed)
+        {
+            cell.Items.Add(unit.ToString());
+        }
+
+        // 动态单位与技能无关, 始终可选; 放在 keymap 编号之后。
+        foreach (var unit in _units)
+        {
+            if (!string.IsNullOrWhiteSpace(unit.Name) && !cell.Items.Contains(unit.Name))
+            {
+                cell.Items.Add(unit.Name);
+            }
+        }
+
+        if (string.IsNullOrEmpty(desiredValue))
+        {
+            cell.Value = string.Empty;
+        }
+        else if (cell.Items.Contains(desiredValue))
+        {
+            // keymap 编号或动态单位名(已在上面加入), 直接保留。
+            cell.Value = desiredValue;
+        }
+        else if (allowed.Count == 0)
+        {
+            // 该技能不在 keymap(自定义技能), 保留旧值不强制清空。
+            cell.Items.Add(desiredValue);
+            cell.Value = desiredValue;
+        }
+        else
+        {
+            // 技能切换导致旧的数字目标非法, 清空。
+            cell.Value = string.Empty;
+        }
+    }
+
+    private void OnRulesGridCellValueChanged(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex < 0)
+        {
+            return;
+        }
+
+        // 技能改变时联动刷新该行"目标"的可选值。
+        if (_rulesGrid.Columns[e.ColumnIndex].Name == "Spell")
+        {
+            UpdateUnitCellItems(_rulesGrid.Rows[e.RowIndex]);
         }
     }
 
@@ -302,6 +497,267 @@ public sealed class ModuleEditorControl : UserControl
         }
     }
 
+    private void AddUnit()
+    {
+        using var editor = new UnitEditorForm(GetAuraFields(), CollectTakenNames(null), null, null);
+        if (editor.ShowDialog(FindForm()) != DialogResult.OK)
+        {
+            return;
+        }
+
+        if (editor.ResultUnit is { } unit)
+        {
+            _units.Add(unit);
+        }
+        else if (editor.ResultCount is { } count)
+        {
+            _counts.Add(count);
+        }
+
+        RefreshUnitsList();
+        RefreshUnitDependentUi();
+    }
+
+    private void EditSelectedUnit()
+    {
+        var (kind, index) = GetSelectedUnitRef();
+        if (kind == UnitRowKind.None)
+        {
+            return;
+        }
+
+        var existingUnit = kind == UnitRowKind.Unit ? _units[index] : null;
+        var existingCount = kind == UnitRowKind.Count ? _counts[index] : null;
+        var ownName = existingUnit?.Name ?? existingCount?.Name;
+
+        using var editor = new UnitEditorForm(GetAuraFields(), CollectTakenNames(ownName), existingUnit, existingCount);
+        if (editor.ShowDialog(FindForm()) != DialogResult.OK)
+        {
+            return;
+        }
+
+        // 类别可能在编辑中改变(单位↔数量), 先移除原项再按结果加入。
+        if (kind == UnitRowKind.Unit)
+        {
+            _units.RemoveAt(index);
+        }
+        else
+        {
+            _counts.RemoveAt(index);
+        }
+
+        if (editor.ResultUnit is { } unit)
+        {
+            _units.Add(unit);
+        }
+        else if (editor.ResultCount is { } count)
+        {
+            _counts.Add(count);
+        }
+
+        RefreshUnitsList();
+        RefreshUnitDependentUi();
+    }
+
+    private void DeleteSelectedUnit()
+    {
+        var (kind, index) = GetSelectedUnitRef();
+        if (kind == UnitRowKind.None)
+        {
+            return;
+        }
+
+        if (kind == UnitRowKind.Unit)
+        {
+            _units.RemoveAt(index);
+        }
+        else
+        {
+            _counts.RemoveAt(index);
+        }
+
+        RefreshUnitsList();
+        RefreshUnitDependentUi();
+    }
+
+    // ListView 行顺序: 先全部单位, 再全部数量。把选中行映射回对应列表索引。
+    private (UnitRowKind Kind, int Index) GetSelectedUnitRef()
+    {
+        if (_unitsList.SelectedIndices.Count == 0)
+        {
+            return (UnitRowKind.None, -1);
+        }
+
+        var row = _unitsList.SelectedIndices[0];
+        if (row < _units.Count)
+        {
+            return (UnitRowKind.Unit, row);
+        }
+
+        var countIndex = row - _units.Count;
+        return countIndex < _counts.Count ? (UnitRowKind.Count, countIndex) : (UnitRowKind.None, -1);
+    }
+
+    private void RefreshUnitsList()
+    {
+        _unitsList.BeginUpdate();
+        _unitsList.Items.Clear();
+        foreach (var unit in _units)
+        {
+            _unitsList.Items.Add(new ListViewItem([unit.Name, "单位", DescribeUnit(unit)]));
+        }
+
+        foreach (var count in _counts)
+        {
+            _unitsList.Items.Add(new ListViewItem([count.Name, "数量", DescribeCount(count)]));
+        }
+
+        _unitsList.EndUpdate();
+    }
+
+    // 单位/数量增删改后, 刷新各规则行"目标"下拉以反映最新的动态单位名。
+    private void RefreshUnitDependentUi()
+    {
+        foreach (DataGridViewRow row in _rulesGrid.Rows)
+        {
+            if (!row.IsNewRow)
+            {
+                UpdateUnitCellItems(row);
+            }
+        }
+    }
+
+    private IReadOnlyList<string> GetAuraFields()
+    {
+        return _fieldCatalog
+            .GetGroupFields(ReadMatchCombo(_classBox), ReadMatchCombo(_specBox))
+            .Select(field => field.Name)
+            .ToList();
+    }
+
+    // 名称查重集合: 其它单位/数量 + 当前职业/专精的状态字段与 group 字段; 排除正在编辑项自身。
+    private IReadOnlyCollection<string> CollectTakenNames(string? ownName)
+    {
+        var classId = ReadMatchCombo(_classBox);
+        var specId = ReadMatchCombo(_specBox);
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var unit in _units)
+        {
+            taken.Add(unit.Name);
+        }
+
+        foreach (var count in _counts)
+        {
+            taken.Add(count.Name);
+        }
+
+        foreach (var field in _fieldCatalog.GetFields(classId, specId))
+        {
+            taken.Add(field.Name);
+        }
+
+        foreach (var field in _fieldCatalog.GetGroupFields(classId, specId))
+        {
+            taken.Add(field.Name);
+        }
+
+        if (!string.IsNullOrEmpty(ownName))
+        {
+            taken.Remove(ownName);
+        }
+
+        return taken;
+    }
+
+    private static string DescribeUnit(ModuleUnit unit)
+    {
+        var threshold = unit.HealthThreshold ?? 100;
+        var aura = unit.AuraNames is { Count: > 0 } ? unit.AuraNames[0] : "?";
+        var auras = unit.AuraNames is { Count: > 0 } ? string.Join("/", unit.AuraNames) : "?";
+        var dir = unit.Reverse ? "逆序" : "正序";
+        return unit.Kind switch
+        {
+            UnitSelectorKind.LowestHealth => $"血量最低 (<{threshold})",
+            UnitSelectorKind.LowestHealthWithAnyAura => $"带任一[{auras}]且血最低 (<{threshold})",
+            UnitSelectorKind.LowestHealthWithoutAura => $"不带[{aura}]且血最低 (<{threshold})",
+            UnitSelectorKind.LowestHealthWithAura => $"带[{aura}]且血最低 (<{threshold})",
+            UnitSelectorKind.LowestHealthWithAuraCount => $"[{aura}]={unit.AuraCount}且血最低 (<{threshold})",
+            UnitSelectorKind.UnitWithRole => $"职责={unit.Role} {dir}首个",
+            UnitSelectorKind.UnitWithRoleWithoutAura => $"职责={unit.Role}且不带[{aura}] {dir}",
+            UnitSelectorKind.UnitWithAura => $"带[{aura}] 持续最久",
+            UnitSelectorKind.UnitWithDispelType => $"驱散类型={unit.DispelType}",
+            _ => unit.Kind.ToString()
+        };
+    }
+
+    private static string DescribeCount(ModuleCountField count)
+    {
+        var threshold = count.HealthThreshold ?? 100;
+        return count.Kind switch
+        {
+            CountKind.UnitsBelowHealth => $"血量<{threshold} 的人数",
+            CountKind.UnitsWithoutAuraBelowHealth => $"不带[{count.AuraName}]且血<{threshold} 的人数",
+            CountKind.UnitsWithAura => $"带[{count.AuraName}] 的人数",
+            _ => count.Kind.ToString()
+        };
+    }
+
+    private enum UnitRowKind
+    {
+        None,
+        Unit,
+        Count
+    }
+
+    private void ApplyColumnWidths(Dictionary<string, int>? widths)
+    {
+        if (widths is null || widths.Count == 0)
+        {
+            return;
+        }
+
+        _suppressColumnSave = true;
+        try
+        {
+            foreach (var name in FixedWidthColumns)
+            {
+                if (widths.TryGetValue(name, out var width) && width > 0)
+                {
+                    _rulesGrid.Columns[name]!.Width = width;
+                }
+            }
+        }
+        finally
+        {
+            _suppressColumnSave = false;
+        }
+    }
+
+    private void OnColumnWidthChanged(object? sender, DataGridViewColumnEventArgs e)
+    {
+        // Fill 列(条件)宽度随窗口/其它列变化, 不参与保存; 程序化恢复期间也跳过。
+        if (_suppressColumnSave || e.Column.Name == "Condition")
+        {
+            return;
+        }
+
+        SaveColumnWidths();
+    }
+
+    private void SaveColumnWidths()
+    {
+        var cache = UiCacheStore.Load();
+        cache.ModuleRulesGridColumns ??= new();
+
+        foreach (var name in FixedWidthColumns)
+        {
+            cache.ModuleRulesGridColumns[name] = _rulesGrid.Columns[name]!.Width;
+        }
+
+        UiCacheStore.Save(cache);
+    }
+
     private void OnRulesGridCellClick(object? sender, DataGridViewCellEventArgs e)
     {
         if (e.RowIndex < 0 || e.ColumnIndex < 0)
@@ -309,19 +765,34 @@ public sealed class ModuleEditorControl : UserControl
             return;
         }
 
-        if (_rulesGrid.Columns[e.ColumnIndex].Name != "Condition")
+        var columnName = _rulesGrid.Columns[e.ColumnIndex].Name;
+        if (columnName == "Delete")
         {
+            DeleteRule(e.RowIndex);
             return;
         }
 
-        OpenConditionEditor(e.RowIndex);
+        if (columnName == "Condition")
+        {
+            OpenConditionEditor(e.RowIndex);
+        }
+    }
+
+    private void DeleteRule(int rowIndex)
+    {
+        var row = _rulesGrid.Rows[rowIndex];
+        // 新行占位符无需删除。
+        if (!row.IsNewRow)
+        {
+            _rulesGrid.Rows.RemoveAt(rowIndex);
+        }
     }
 
     private void OpenConditionEditor(int rowIndex)
     {
         var row = _rulesGrid.Rows[rowIndex];
         var current = row.IsNewRow ? string.Empty : CellText(row, "Condition");
-        var fields = _fieldCatalog.GetFields(ReadMatchCombo(_classBox), ReadMatchCombo(_specBox));
+        var fields = BuildConditionFields();
 
         using var editor = new ConditionEditorForm(fields, current);
         if (editor.ShowDialog(FindForm()) != DialogResult.OK)
@@ -343,6 +814,44 @@ public sealed class ModuleEditorControl : UserControl
         row.Cells["Condition"].Value = editor.ConditionText;
     }
 
+    // 条件字段 = 状态/技能字段 + 每个动态单位的 名字.字段 与裸名(存在) + 每个数量名。
+    private IReadOnlyList<ConditionField> BuildConditionFields()
+    {
+        var classId = ReadMatchCombo(_classBox);
+        var specId = ReadMatchCombo(_specBox);
+        var fields = new List<ConditionField>(_fieldCatalog.GetFields(classId, specId));
+        var groupFields = _fieldCatalog.GetGroupFields(classId, specId);
+
+        foreach (var unit in _units)
+        {
+            if (string.IsNullOrWhiteSpace(unit.Name))
+            {
+                continue;
+            }
+
+            foreach (var groupField in groupFields)
+            {
+                fields.Add(new ConditionField(
+                    $"{unit.Name}.{groupField.Name}",
+                    $"{unit.Name}: {groupField.DisplayName}",
+                    groupField.Type));
+            }
+
+            // 裸单位名作为存在性布尔。
+            fields.Add(new ConditionField(unit.Name, $"{unit.Name} (存在)", ConditionFieldType.Bool));
+        }
+
+        foreach (var count in _counts)
+        {
+            if (!string.IsNullOrWhiteSpace(count.Name))
+            {
+                fields.Add(new ConditionField(count.Name, $"人数: {count.Name}", ConditionFieldType.Int));
+            }
+        }
+
+        return fields;
+    }
+
     private Control BuildActionRow()
     {
         var row = new TableLayoutPanel
@@ -357,7 +866,7 @@ public sealed class ModuleEditorControl : UserControl
 
         var hint = new Label
         {
-            Text = "技能/目标下拉来自当前职业的 keymap，留空表示默认；点击“条件”列打开可视化编辑器",
+            Text = "目标可选 keymap 编号或上方定义的动态单位；点击“条件”列打开可视化编辑器",
             Dock = DockStyle.Fill,
             ForeColor = UiTheme.Muted,
             TextAlign = ContentAlignment.MiddleLeft,
@@ -425,21 +934,31 @@ public sealed class ModuleEditorControl : UserControl
     {
         _nameBox.Text = module.Name;
         _enabledBox.Checked = module.Enabled;
+        // 先填充动态单位/数量, 后续目标下拉与条件字段都依赖它们。
+        _units.Clear();
+        _units.AddRange(module.Units.Select(unit => unit.Clone()));
+        _counts.Clear();
+        _counts.AddRange(module.Counts.Select(count => count.Clone()));
+        RefreshUnitsList();
         SelectClass(module.Match.ClassId);
         SelectSpec(module.Match.SpecId);
         SelectPartyType(module.Match.PartyType);
         SelectHeroTalent(module.Match.HeroTalent);
         _pathLabel.Text = module.FilePath ?? "尚未保存";
         _rulesGrid.Rows.Clear();
-        // SelectClass 只在选项变化时触发刷新, 这里显式刷新一次并补录旧值, 保证行值都在下拉选项里。
         RefreshKeymapColumns();
+        ApplyColumnWidths(UiCacheStore.Load().ModuleRulesGridColumns);
 
         foreach (var rule in module.Rules)
         {
-            var unitText = rule.Unit?.ToString() ?? string.Empty;
+            // 动态目标优先显示单位名, 否则显示数字单位。
+            var unitText = !string.IsNullOrWhiteSpace(rule.UnitName)
+                ? rule.UnitName!
+                : rule.Unit?.ToString() ?? string.Empty;
             EnsureComboItem(_spellColumn, rule.Spell);
-            EnsureComboItem(_unitColumn, unitText);
-            _rulesGrid.Rows.Add(rule.Enabled, rule.Spell, unitText, rule.Condition);
+            // 先加行(目标先留空), 再按技能重建目标选项并写回目标值, 避免值不在选项内被吞掉。
+            var index = _rulesGrid.Rows.Add(rule.Enabled, rule.Spell, string.Empty, rule.Condition);
+            RebuildUnitCell(_rulesGrid.Rows[index], unitText);
         }
     }
 
@@ -448,6 +967,9 @@ public sealed class ModuleEditorControl : UserControl
         _selectedModule = null;
         _nameBox.Clear();
         _enabledBox.Checked = false;
+        _units.Clear();
+        _counts.Clear();
+        RefreshUnitsList();
         SelectClass(null);
         SelectSpec(null);
         SelectPartyType(null);
@@ -547,12 +1069,17 @@ public sealed class ModuleEditorControl : UserControl
             HeroTalent = ReadMatchCombo(_heroTalentBox)
         };
 
+        module.Units = _units.Select(unit => unit.Clone()).ToList();
+        module.Counts = _counts.Select(count => count.Clone()).ToList();
         module.Rules = ReadRules();
         return true;
     }
 
     private List<ModuleRule> ReadRules()
     {
+        var unitNames = new HashSet<string>(
+            _units.Where(unit => !string.IsNullOrWhiteSpace(unit.Name)).Select(unit => unit.Name),
+            StringComparer.Ordinal);
         var rules = new List<ModuleRule>();
         foreach (DataGridViewRow row in _rulesGrid.Rows)
         {
@@ -563,18 +1090,22 @@ public sealed class ModuleEditorControl : UserControl
 
             var condition = CellText(row, "Condition");
             var spell = CellText(row, "Spell");
+            var unitText = CellText(row, "Unit");
             if (string.IsNullOrWhiteSpace(condition)
                 && string.IsNullOrWhiteSpace(spell)
-                && string.IsNullOrWhiteSpace(CellText(row, "Unit")))
+                && string.IsNullOrWhiteSpace(unitText))
             {
                 continue;
             }
 
+            // 目标文本命中已定义动态单位名 → UnitName; 否则按数字 → Unit; 都不是则留空。
+            var isDynamic = unitNames.Contains(unitText);
             rules.Add(new ModuleRule
             {
                 Enabled = CellBool(row, "Enabled", defaultValue: true),
                 Condition = condition,
-                Unit = ParseNullableInt(CellText(row, "Unit")),
+                Unit = isDynamic ? null : ParseNullableInt(unitText),
+                UnitName = isDynamic ? unitText : null,
                 Spell = spell,
                 Hotkey = string.Empty,
                 Step = string.Empty
