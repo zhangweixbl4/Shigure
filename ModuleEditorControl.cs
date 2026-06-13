@@ -21,6 +21,13 @@ public sealed class ModuleEditorControl : UserControl
     private readonly DataGridViewComboBoxColumn _adjustmentFieldColumn = new();
     private readonly ListView _unitsList = new();
     private readonly Label _pathLabel = new();
+    private readonly ToolTip _rulesGridToolTip = new()
+    {
+        InitialDelay = 300,
+        ReshowDelay = 100,
+        AutoPopDelay = 4000,
+        ShowAlways = true
+    };
     private List<ModuleDefinition> _modules = new();
     private ModuleDefinition? _selectedModule;
     // 当前编辑中模块的动态单位/数量字段(含未保存的新增), 供目标下拉与条件字段使用。
@@ -149,29 +156,127 @@ public sealed class ModuleEditorControl : UserControl
 
     private Control BuildEditorTabs()
     {
-        var tabs = new TabControl
+        var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Margin = new Padding(0, 8, 0, 6)
-        };
-        UiTheme.StyleTabControl(tabs, itemWidth: 150);
-        tabs.TabPages.Add(CreateEditorTabPage("动态单位", BuildUnitsPanel(showTitle: false)));
-        tabs.TabPages.Add(CreateEditorTabPage("动态数值", BuildAdjustmentsPanel(showTitle: false)));
-        tabs.TabPages.Add(CreateEditorTabPage("逻辑编辑", BuildRulesPanel(showTitle: false)));
-        return tabs;
-    }
-
-    private static TabPage CreateEditorTabPage(string text, Control content)
-    {
-        var page = new TabPage(text)
-        {
-            BackColor = UiTheme.Surface,
-            ForeColor = UiTheme.Text,
+            Margin = new Padding(0, 8, 0, 6),
             Padding = new Padding(0),
-            UseVisualStyleBackColor = false
+            BackColor = UiTheme.Surface,
+            ColumnCount = 1,
+            RowCount = 2
         };
-        page.Controls.Add(content);
-        return page;
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var tabBar = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = UiTheme.Surface,
+            ColumnCount = 3,
+            RowCount = 1,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
+        };
+        tabBar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        for (var i = 0; i < 3; i++)
+        {
+            tabBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F / 3F));
+        }
+
+        var contentHost = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = UiTheme.SurfaceRaised,
+            Margin = new Padding(0)
+        };
+
+        var pages = new[]
+        {
+            BuildUnitsPanel(showTitle: false),
+            BuildAdjustmentsPanel(showTitle: false),
+            BuildRulesPanel(showTitle: false)
+        };
+        foreach (var page in pages)
+        {
+            page.Dock = DockStyle.Fill;
+            page.Visible = false;
+            contentHost.Controls.Add(page);
+        }
+
+        var labels = new Label[3];
+        var selectedIndex = -1;
+
+        void SelectTab(int index)
+        {
+            if (selectedIndex == index)
+            {
+                return;
+            }
+
+            selectedIndex = index;
+            for (var i = 0; i < labels.Length; i++)
+            {
+                var selected = i == index;
+                labels[i].BackColor = selected ? UiTheme.Field : UiTheme.Surface;
+                labels[i].ForeColor = selected ? UiTheme.Text : UiTheme.Muted;
+                labels[i].Invalidate();
+                pages[i].Visible = selected;
+                if (selected)
+                {
+                    pages[i].BringToFront();
+                }
+            }
+        }
+
+        var titles = new[] { "动态单位", "动态数值", "逻辑编辑" };
+        for (var i = 0; i < titles.Length; i++)
+        {
+            var index = i;
+            var label = new Label
+            {
+                Text = titles[i],
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                AutoSize = false,
+                BackColor = UiTheme.Surface,
+                ForeColor = UiTheme.Muted,
+                Cursor = Cursors.Hand,
+                Margin = new Padding(i == 0 ? 0 : 1, 0, 0, 0)
+            };
+            label.Click += (_, _) => SelectTab(index);
+            label.MouseEnter += (_, _) =>
+            {
+                if (selectedIndex != index)
+                {
+                    label.BackColor = UiTheme.Hover;
+                }
+            };
+            label.MouseLeave += (_, _) =>
+            {
+                if (selectedIndex != index)
+                {
+                    label.BackColor = UiTheme.Surface;
+                }
+            };
+            label.Paint += (_, e) =>
+            {
+                if (selectedIndex != index)
+                {
+                    return;
+                }
+
+                using var accent = new SolidBrush(UiTheme.Accent);
+                e.Graphics.FillRectangle(accent, 8, label.Height - 3, Math.Max(0, label.Width - 16), 2);
+            };
+
+            labels[i] = label;
+            tabBar.Controls.Add(label, i, 0);
+        }
+
+        root.Controls.Add(tabBar, 0, 0);
+        root.Controls.Add(contentHost, 0, 1);
+        SelectTab(0);
+        return root;
     }
 
     private Control BuildAdjustmentsPanel(bool showTitle = true)
@@ -475,6 +580,7 @@ public sealed class ModuleEditorControl : UserControl
         _rulesGrid.AllowUserToDeleteRows = true;
         _rulesGrid.AllowUserToResizeColumns = true;
         _rulesGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+        _rulesGrid.ShowCellToolTips = false;
 
         // 启用/技能/目标 三列宽度固定可调并缓存; 条件列用 Fill 自动充满剩余窗口。
         _rulesGrid.Columns.Add(new DataGridViewCheckBoxColumn
@@ -505,9 +611,14 @@ public sealed class ModuleEditorControl : UserControl
         });
         AddRuleIconColumn("MoveUp", "▲", "上移");
         AddRuleIconColumn("MoveDown", "▼", "下移");
+        AddRuleIconColumn("Copy", "⧉", "复制到下一行");
+        AddRuleIconColumn("InsertBlank", "+", "在下一行添加空白条件");
         AddRuleIconColumn("Delete", "×", "删除", UiTheme.Danger);
         _rulesGrid.CellClick += OnRulesGridCellClick;
         _rulesGrid.CellPainting += OnRulesGridCellPainting;
+        _rulesGrid.CellMouseEnter += OnRulesGridCellMouseEnter;
+        _rulesGrid.CellMouseLeave += OnRulesGridCellMouseLeave;
+        _rulesGrid.MouseLeave += (_, _) => _rulesGridToolTip.Hide(_rulesGrid);
         _rulesGrid.DataError += (_, e) => e.ThrowException = false;
         _rulesGrid.ColumnWidthChanged += OnColumnWidthChanged;
         _rulesGrid.CellValueChanged += OnRulesGridCellValueChanged;
@@ -532,7 +643,6 @@ public sealed class ModuleEditorControl : UserControl
             Name = name,
             HeaderText = string.Empty,
             Text = icon,
-            ToolTipText = tooltip,
             UseColumnTextForButtonValue = true,
             Width = 32,
             MinimumWidth = 32,
@@ -1049,6 +1159,18 @@ public sealed class ModuleEditorControl : UserControl
             return;
         }
 
+        if (columnName == "Copy")
+        {
+            CopyRule(e.RowIndex);
+            return;
+        }
+
+        if (columnName == "InsertBlank")
+        {
+            InsertBlankRule(e.RowIndex);
+            return;
+        }
+
         if (columnName == "Delete")
         {
             DeleteRule(e.RowIndex);
@@ -1069,7 +1191,7 @@ public sealed class ModuleEditorControl : UserControl
         }
 
         var columnName = _rulesGrid.Columns[e.ColumnIndex].Name;
-        if (columnName is not ("MoveUp" or "MoveDown" or "Delete"))
+        if (columnName is not ("MoveUp" or "MoveDown" or "Copy" or "InsertBlank" or "Delete"))
         {
             return;
         }
@@ -1078,6 +1200,8 @@ public sealed class ModuleEditorControl : UserControl
         {
             "MoveUp" => "▲",
             "MoveDown" => "▼",
+            "Copy" => "⧉",
+            "InsertBlank" => "+",
             _ => "×"
         };
         var enabled = IsRuleIconEnabled(columnName, e.RowIndex);
@@ -1088,6 +1212,47 @@ public sealed class ModuleEditorControl : UserControl
         }
 
         PaintGridIconCell(_rulesGrid, e, icon, color);
+    }
+
+    private void OnRulesGridCellMouseEnter(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex < 0)
+        {
+            return;
+        }
+
+        var columnName = _rulesGrid.Columns[e.ColumnIndex].Name;
+        var text = GetRuleIconToolTip(columnName, e.RowIndex);
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        var cellBounds = _rulesGrid.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, cutOverflow: true);
+        _rulesGridToolTip.Show(text, _rulesGrid, cellBounds.Left + cellBounds.Width / 2, cellBounds.Bottom + 4);
+    }
+
+    private void OnRulesGridCellMouseLeave(object? sender, DataGridViewCellEventArgs e)
+    {
+        _rulesGridToolTip.Hide(_rulesGrid);
+    }
+
+    private string GetRuleIconToolTip(string columnName, int rowIndex)
+    {
+        if (!IsRuleIconEnabled(columnName, rowIndex))
+        {
+            return string.Empty;
+        }
+
+        return columnName switch
+        {
+            "MoveUp" => "上移",
+            "MoveDown" => "下移",
+            "Copy" => "复制到下一行",
+            "InsertBlank" => "在下一行添加空白条件",
+            "Delete" => "删除",
+            _ => string.Empty
+        };
     }
 
     private void OnAdjustmentsGridCellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
@@ -1135,6 +1300,8 @@ public sealed class ModuleEditorControl : UserControl
         {
             "MoveUp" => rowIndex > 0,
             "MoveDown" => rowIndex < LastRuleRowIndex(),
+            "Copy" => true,
+            "InsertBlank" => true,
             "Delete" => true,
             _ => false
         };
@@ -1200,10 +1367,43 @@ public sealed class ModuleEditorControl : UserControl
         }
     }
 
+    private void CopyRule(int rowIndex)
+    {
+        _rulesGrid.EndEdit();
+        if (!IsExistingRuleRow(rowIndex))
+        {
+            return;
+        }
+
+        InsertRuleAfter(rowIndex, ReadRuleRow(_rulesGrid.Rows[rowIndex]));
+    }
+
+    private void InsertBlankRule(int rowIndex)
+    {
+        _rulesGrid.EndEdit();
+        if (!IsExistingRuleRow(rowIndex))
+        {
+            return;
+        }
+
+        InsertRuleAfter(rowIndex, new RuleRowValues(true, string.Empty, string.Empty, string.Empty));
+    }
+
+    private void InsertRuleAfter(int rowIndex, RuleRowValues values)
+    {
+        var insertIndex = rowIndex + 1;
+        _rulesGrid.Rows.Insert(insertIndex, 1);
+        var inserted = _rulesGrid.Rows[insertIndex];
+        WriteRuleRow(inserted, values);
+        _rulesGrid.CurrentCell = inserted.Cells["Condition"];
+        inserted.Selected = true;
+        _rulesGrid.Invalidate();
+    }
+
     private void MoveRule(int rowIndex, int direction)
     {
         _rulesGrid.EndEdit();
-        if (rowIndex < 0 || rowIndex > LastRuleRowIndex() || _rulesGrid.Rows[rowIndex].IsNewRow)
+        if (!IsExistingRuleRow(rowIndex))
         {
             return;
         }
@@ -1232,6 +1432,11 @@ public sealed class ModuleEditorControl : UserControl
         }
 
         return last;
+    }
+
+    private bool IsExistingRuleRow(int rowIndex)
+    {
+        return rowIndex >= 0 && rowIndex <= LastRuleRowIndex() && !_rulesGrid.Rows[rowIndex].IsNewRow;
     }
 
     private RuleRowValues ReadRuleRow(DataGridViewRow row)

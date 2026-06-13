@@ -105,13 +105,13 @@
       "Enabled": true,
       "Condition": "施法技能 == 30",
       "Field": "耀90",
-      "Delta": -5
+      "Delta": -4
     },
     {
       "Enabled": true,
       "Condition": "施法技能 == 30",
       "Field": "耀80",
-      "Delta": -5
+      "Delta": -4
     },
     {
       "Enabled": true,
@@ -123,7 +123,7 @@
   "Rules": [
     {
       "Enabled": true,
-      "Condition": "引导 > 0 || 延迟 > 0 && 施法技能 == 5",
+      "Condition": "引导 > 0 || 延迟 > 0 || 施法技能 == 5",
       "Spell": "暂停",
       "Hotkey": "",
       "Step": ""
@@ -261,6 +261,22 @@
       "Condition": "spells.福音 == 0 && 福音层数 == 0 && 耀90 >= 2",
       "Unit": 0,
       "Spell": "福音",
+      "Hotkey": "",
+      "Step": ""
+    },
+    {
+      "Enabled": true,
+      "Condition": "spells.真言术：盾 == 0 && 无盾坦克 == true",
+      "UnitName": "无盾坦克",
+      "Spell": "真言术：盾",
+      "Hotkey": "",
+      "Step": ""
+    },
+    {
+      "Enabled": true,
+      "Condition": "spells.真言术：耀 == 0 && 福音层数 > 0 && 耀层数 == 2 && 耀90 >= 3",
+      "Unit": 0,
+      "Spell": "真言术：耀",
       "Hotkey": "",
       "Step": ""
     }
