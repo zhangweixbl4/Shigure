@@ -228,15 +228,14 @@ public sealed class MainForm : Form, IMessageFilter
             AutoSize = true,
             BackColor = UiTheme.SurfaceRaised,
             ColumnCount = 2,
-            RowCount = 3,
-            Padding = new Padding(12, 10, 12, 4),
+            RowCount = 2,
+            Padding = new Padding(12, 12, 12, 6),
             Margin = new Padding(0, 0, 0, 10)
         };
         settingsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
         settingsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        settingsGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        settingsGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        settingsGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        settingsGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        settingsGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
 
         Label CreateSettingLabel(string text) => new()
         {
@@ -244,7 +243,7 @@ public sealed class MainForm : Form, IMessageFilter
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = UiTheme.Muted,
-            Margin = new Padding(0, 0, 10, 8)
+            Margin = new Padding(0, 0, 10, 12)
         };
 
         const int settingControlWidth = 190;
@@ -252,10 +251,11 @@ public sealed class MainForm : Form, IMessageFilter
         _toggleKeyButton = UiTheme.CreateButton("XBUTTON2", UiTheme.Field, UiTheme.Text);
         _toggleKeyButton.AutoSize = false;
         _toggleKeyButton.Width = settingControlWidth;
-        _toggleKeyButton.Height = 30;
-        _toggleKeyButton.Padding = new Padding(6, 1, 6, 1);
+        _toggleKeyButton.Height = 36;
+        _toggleKeyButton.Padding = new Padding(6, 0, 6, 0);
+        _toggleKeyButton.TextAlign = ContentAlignment.MiddleCenter;
         _toggleKeyButton.Anchor = AnchorStyles.Left;
-        _toggleKeyButton.Margin = new Padding(0, 0, 0, 8);
+        _toggleKeyButton.Margin = new Padding(0, 0, 0, 12);
         _toggleKeyButton.Click += (_, _) => BeginCaptureToggleKey();
         settingsGrid.Controls.Add(CreateSettingLabel("触发键"), 0, 0);
         settingsGrid.Controls.Add(_toggleKeyButton, 1, 0);
@@ -266,17 +266,9 @@ public sealed class MainForm : Form, IMessageFilter
         _modeComboBox.SelectedIndex = 0;
         _modeComboBox.Width = settingControlWidth;
         _modeComboBox.Anchor = AnchorStyles.Left;
-        _modeComboBox.Margin = new Padding(0, 0, 0, 8);
+        _modeComboBox.Margin = new Padding(0, 0, 0, 12);
         settingsGrid.Controls.Add(CreateSettingLabel("发送模式"), 0, 1);
         settingsGrid.Controls.Add(_modeComboBox, 1, 1);
-
-        _moduleComboBox = new ComboBox();
-        UiTheme.StyleComboBox(_moduleComboBox);
-        _moduleComboBox.Width = 520;
-        _moduleComboBox.Anchor = AnchorStyles.Left;
-        _moduleComboBox.Margin = new Padding(0, 0, 0, 8);
-        settingsGrid.Controls.Add(CreateSettingLabel("模块选择"), 0, 2);
-        settingsGrid.Controls.Add(_moduleComboBox, 1, 2);
 
         var moduleInfo = new TableLayoutPanel
         {
@@ -284,12 +276,35 @@ public sealed class MainForm : Form, IMessageFilter
             AutoSize = true,
             BackColor = UiTheme.SurfaceRaised,
             ColumnCount = 2,
-            RowCount = 1,
-            Padding = new Padding(12, 10, 12, 10),
+            RowCount = 2,
+            Padding = new Padding(12, 12, 12, 10),
             Margin = new Padding(0)
         };
+        moduleInfo.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
         moduleInfo.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        moduleInfo.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        moduleInfo.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        moduleInfo.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        _moduleComboBox = new ComboBox();
+        UiTheme.StyleComboBox(_moduleComboBox);
+        _moduleComboBox.Width = 520;
+        _moduleComboBox.Anchor = AnchorStyles.Left;
+        _moduleComboBox.Margin = new Padding(0, 0, 0, 12);
+        moduleInfo.Controls.Add(CreateSettingLabel("模块选择"), 0, 0);
+        moduleInfo.Controls.Add(_moduleComboBox, 1, 0);
+
+        var moduleStatus = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = UiTheme.SurfaceRaised,
+            Margin = new Padding(0)
+        };
+        moduleStatus.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        moduleStatus.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        moduleStatus.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var moduleInfoText = new FlowLayoutPanel
         {
@@ -308,13 +323,16 @@ public sealed class MainForm : Form, IMessageFilter
 
         var refreshModulesButton = UiTheme.CreateButton("刷新模块", UiTheme.Field, UiTheme.Text);
         refreshModulesButton.AutoSize = false;
-        refreshModulesButton.Size = new Size(96, 32);
-        refreshModulesButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        refreshModulesButton.Margin = new Padding(8, 0, 0, 0);
+        refreshModulesButton.Size = new Size(116, 38);
+        refreshModulesButton.Padding = new Padding(8, 0, 8, 0);
+        refreshModulesButton.TextAlign = ContentAlignment.MiddleCenter;
+        refreshModulesButton.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+        refreshModulesButton.Margin = new Padding(0, 0, 0, 8);
         refreshModulesButton.Click += (_, _) => RefreshModuleSelector(_lastSnapshot, reloadModules: true);
 
-        moduleInfo.Controls.Add(moduleInfoText, 0, 0);
-        moduleInfo.Controls.Add(refreshModulesButton, 1, 0);
+        moduleStatus.Controls.Add(refreshModulesButton, 0, 0);
+        moduleStatus.Controls.Add(moduleInfoText, 0, 1);
+        moduleInfo.Controls.Add(moduleStatus, 1, 1);
 
         panel.Controls.Add(settingsGrid, 0, 0);
         panel.Controls.Add(moduleInfo, 0, 1);

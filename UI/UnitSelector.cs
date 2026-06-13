@@ -16,7 +16,7 @@ public static class UnitSelector
     public static string? Resolve(ModuleUnit unit, GameState state)
     {
         var group = state.Group;
-        var threshold = unit.HealthThreshold ?? DefaultThreshold;
+        var threshold = ResolveThreshold(unit.HealthThreshold, unit.HealthThresholdField, state);
         var aura = FirstAura(unit.AuraNames);
 
         return unit.Kind switch
@@ -52,7 +52,7 @@ public static class UnitSelector
     public static int Resolve(ModuleCountField count, GameState state)
     {
         var group = state.Group;
-        var threshold = count.HealthThreshold ?? DefaultThreshold;
+        var threshold = ResolveThreshold(count.HealthThreshold, count.HealthThresholdField, state);
 
         return count.Kind switch
         {
@@ -199,6 +199,14 @@ public static class UnitSelector
     private static bool BelowThreshold(IReadOnlyDictionary<string, object?> data, int threshold)
     {
         return TryInt(GetField(data, "生命值"), out var pct) && pct > 0 && pct < threshold;
+    }
+
+    private static int ResolveThreshold(int? fixedValue, string? fieldName, GameState state)
+    {
+        return !string.IsNullOrWhiteSpace(fieldName)
+            && ModuleConditionEvaluator.TryResolveInt(state, fieldName, out var dynamicValue)
+                ? dynamicValue
+                : fixedValue ?? DefaultThreshold;
     }
 
     private static bool AuraEquals(IReadOnlyDictionary<string, object?> data, string auraName, int target)

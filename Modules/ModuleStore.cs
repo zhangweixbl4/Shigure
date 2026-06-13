@@ -204,6 +204,7 @@ public sealed class ModuleValueAdjustment
     public string Condition { get; set; } = string.Empty;
     public string Field { get; set; } = string.Empty;
     public int Delta { get; set; }
+    public string Formula { get; set; } = string.Empty;
 
     public ModuleValueAdjustment Clone()
     {
@@ -212,7 +213,8 @@ public sealed class ModuleValueAdjustment
             Enabled = Enabled,
             Condition = Condition,
             Field = Field,
-            Delta = Delta
+            Delta = Delta,
+            Formula = Formula
         };
     }
 }
@@ -469,17 +471,20 @@ public sealed class ModuleStore
         {
             unit.Name = unit.Name.Trim();
             unit.HealthName = string.IsNullOrWhiteSpace(unit.HealthName) ? null : unit.HealthName.Trim();
+            unit.HealthThresholdField = string.IsNullOrWhiteSpace(unit.HealthThresholdField) ? null : unit.HealthThresholdField.Trim();
         }
 
         foreach (var count in module.Counts)
         {
             count.Name = count.Name.Trim();
+            count.HealthThresholdField = string.IsNullOrWhiteSpace(count.HealthThresholdField) ? null : count.HealthThresholdField.Trim();
         }
 
         foreach (var adjustment in module.ValueAdjustments)
         {
             adjustment.Field = adjustment.Field.Trim();
             adjustment.Condition = adjustment.Condition?.Trim() ?? string.Empty;
+            adjustment.Formula = adjustment.Formula?.Trim() ?? string.Empty;
         }
 
         module.Rules ??= new List<ModuleRule>();
@@ -626,9 +631,13 @@ public static class ModuleLogic
             return existingUnits;
         }
 
+        var earlyAppliedAdjustments = ApplyValueAdjustments(
+            module,
+            state,
+            adjustment => IsEarlyThresholdAdjustment(module, state, adjustment));
         var unitSlots = ResolveUnits(module, state);
         ResolveCounts(module, state);
-        ApplyValueAdjustments(module, state);
+        ApplyValueAdjustments(module, state, adjustment => !earlyAppliedAdjustments.Contains(adjustment));
         state.Values["$dynamicModuleId"] = module.Id;
         return unitSlots;
     }
@@ -683,11 +692,21 @@ public static class ModuleLogic
         state.Values["$counts"] = counts;
     }
 
-    private static void ApplyValueAdjustments(ModuleDefinition module, GameState state)
+    private static HashSet<ModuleValueAdjustment> ApplyValueAdjustments(
+        ModuleDefinition module,
+        GameState state,
+        Func<ModuleValueAdjustment, bool>? include = null)
     {
+        var applied = new HashSet<ModuleValueAdjustment>();
         foreach (var adjustment in module.ValueAdjustments.Where(adjustment => adjustment.Enabled))
         {
-            if (string.IsNullOrWhiteSpace(adjustment.Field) || adjustment.Delta == 0)
+            if (string.IsNullOrWhiteSpace(adjustment.Field)
+                || (adjustment.Delta == 0 && string.IsNullOrWhiteSpace(adjustment.Formula)))
+            {
+                continue;
+            }
+
+            if (include is not null && !include(adjustment))
             {
                 continue;
             }
@@ -698,8 +717,99 @@ public static class ModuleLogic
                 continue;
             }
 
-            ApplyValueDelta(state, adjustment.Field, adjustment.Delta);
+            if (!ApplyValueAdjustment(state, adjustment))
+            {
+                continue;
+            }
+
+            applied.Add(adjustment);
         }
+
+        return applied;
+    }
+
+    private static bool IsEarlyThresholdAdjustment(
+        ModuleDefinition module,
+        GameState state,
+        ModuleValueAdjustment adjustment)
+    {
+        var key = adjustment.Field.Trim();
+        return key.Length > 0
+            && !key.Contains('.')
+            && !key.StartsWith('$')
+            && DynamicThresholdFields(module).Contains(key);
+    }
+
+    private static HashSet<string> DynamicThresholdFields(ModuleDefinition module)
+    {
+        var fields = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var unit in module.Units)
+        {
+            if (!string.IsNullOrWhiteSpace(unit.HealthThresholdField))
+            {
+                fields.Add(unit.HealthThresholdField.Trim());
+            }
+        }
+
+        foreach (var count in module.Counts)
+        {
+            if (!string.IsNullOrWhiteSpace(count.HealthThresholdField))
+            {
+                fields.Add(count.HealthThresholdField.Trim());
+            }
+        }
+
+        return fields;
+    }
+
+    private static bool ApplyValueAdjustment(GameState state, ModuleValueAdjustment adjustment)
+    {
+        if (!string.IsNullOrWhiteSpace(adjustment.Formula))
+        {
+            if (!FormulaEvaluator.TryEvaluateInt(adjustment.Formula, state, out var value, out _))
+            {
+                return false;
+            }
+
+            SetDynamicValue(state, adjustment.Field, value);
+            return true;
+        }
+
+        ApplyValueDelta(state, adjustment.Field, adjustment.Delta);
+        return true;
+    }
+
+    private static void SetDynamicValue(GameState state, string field, object? value)
+    {
+        var key = field.Trim();
+        if (key.Length == 0)
+        {
+            return;
+        }
+
+        GetOrCreateDynamicValues(state)[key] = value;
+    }
+
+    private static Dictionary<string, object?> GetOrCreateDynamicValues(GameState state)
+    {
+        if (state.Values.TryGetValue("$dynamicvalues", out var dynamicObj))
+        {
+            if (dynamicObj is Dictionary<string, object?> dynamicValues)
+            {
+                return dynamicValues;
+            }
+
+            if (dynamicObj is IReadOnlyDictionary<string, object?> existingValues)
+            {
+                var copiedValues = new Dictionary<string, object?>(existingValues, StringComparer.Ordinal);
+                state.Values["$dynamicvalues"] = copiedValues;
+                return copiedValues;
+            }
+        }
+
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+        state.Values["$dynamicvalues"] = values;
+        return values;
     }
 
     private static void ApplyValueDelta(GameState state, string field, int delta)
@@ -727,6 +837,11 @@ public static class ModuleLogic
         }
 
         state.Values[key] = AddDelta(state.Values.TryGetValue(key, out var value) ? value : null, delta);
+    }
+
+    private static int ToInt(object? value)
+    {
+        return TryToInt(value, out var number) ? number : 0;
     }
 
     private static int AddDelta(object? value, int delta)
@@ -851,6 +966,21 @@ public static class ModuleConditionEvaluator
         return true;
     }
 
+    public static bool TryResolveInt(GameState state, string fieldName, out int value)
+    {
+        if (TryResolveDouble(state, fieldName, out var number))
+        {
+            value = (int)number;
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    public static bool TryResolveDouble(GameState state, string fieldName, out double value)
+        => TryToDouble(ResolveValue(state, fieldName), out value);
+
     private static bool TryEvaluateTerm(string term, GameState state, out bool matched, out string? error)
     {
         matched = false;
@@ -966,6 +1096,13 @@ public static class ModuleConditionEvaluator
             && units2.TryGetValue(key, out var bareSlot))
         {
             return bareSlot is not null;
+        }
+
+        if (state.Values.TryGetValue("$dynamicvalues", out var dynamicObj)
+            && dynamicObj is IReadOnlyDictionary<string, object?> dynamicValues
+            && dynamicValues.TryGetValue(key, out var dynamicValue))
+        {
+            return dynamicValue;
         }
 
         return state.GetValue(key);

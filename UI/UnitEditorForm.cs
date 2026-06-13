@@ -52,7 +52,14 @@ public sealed class UnitEditorForm : Form
         new("拥有某光环的人数", CountKind.UnitsWithAura)
     ];
 
+    private static readonly ThresholdModeItem[] ThresholdModeOptions =
+    [
+        new("固定阈值", false),
+        new("动态阈值", true)
+    ];
+
     private readonly IReadOnlyList<string> _auraFields;
+    private readonly IReadOnlyList<string> _thresholdFields;
     private readonly HashSet<string> _takenNames;
 
     private readonly Label _healthNameLabel = new();
@@ -64,6 +71,8 @@ public sealed class UnitEditorForm : Form
     private readonly FlowLayoutPanel _paramPanel = new();
 
     private readonly NumericUpDown _thresholdBox = new();
+    private readonly ComboBox _thresholdModeBox = new();
+    private readonly ComboBox _thresholdFieldBox = new();
     private readonly ComboBox _roleBox = new();
     private readonly CheckBox _reverseBox = new();
     private readonly ComboBox _auraBox = new();
@@ -71,7 +80,9 @@ public sealed class UnitEditorForm : Form
     private readonly NumericUpDown _auraCountBox = new();
     private readonly ComboBox _dispelTypeBox = new();
 
+    private Panel _thresholdModeRow = null!;
     private Panel _thresholdRow = null!;
+    private Panel _thresholdFieldRow = null!;
     private Panel _lowestHealthAuraFilterRow = null!;
     private Panel _roleRow = null!;
     private Panel _reverseRow = null!;
@@ -85,11 +96,13 @@ public sealed class UnitEditorForm : Form
 
     public UnitEditorForm(
         IReadOnlyList<string> auraFields,
+        IReadOnlyList<string> thresholdFields,
         IReadOnlyCollection<string> takenNames,
         ModuleUnit? existingUnit,
         ModuleCountField? existingCount)
     {
         _auraFields = auraFields;
+        _thresholdFields = thresholdFields;
         _takenNames = new HashSet<string>(takenNames, StringComparer.OrdinalIgnoreCase);
         InitializeComponent();
         Seed(existingUnit, existingCount);
@@ -174,6 +187,27 @@ public sealed class UnitEditorForm : Form
         _thresholdBox.Value = 100;
         StyleNumeric(_thresholdBox);
 
+        UiTheme.StyleComboBox(_thresholdModeBox);
+        _thresholdModeBox.DropDownWidth = 160;
+        _thresholdModeBox.Items.AddRange(ThresholdModeOptions.Cast<object>().ToArray());
+        _thresholdModeBox.SelectedIndex = 0;
+        _thresholdModeBox.SelectedIndexChanged += (_, _) => UpdateParamVisibility();
+
+        UiTheme.StyleComboBox(_thresholdFieldBox);
+        _thresholdFieldBox.DropDownWidth = 360;
+        foreach (var field in _thresholdFields)
+        {
+            if (!_thresholdFieldBox.Items.Contains(field))
+            {
+                _thresholdFieldBox.Items.Add(field);
+            }
+        }
+
+        if (_thresholdFieldBox.Items.Count > 0)
+        {
+            _thresholdFieldBox.SelectedIndex = 0;
+        }
+
         UiTheme.StyleComboBox(_lowestHealthAuraFilterBox);
         _lowestHealthAuraFilterBox.DropDownWidth = 220;
         _lowestHealthAuraFilterBox.Items.AddRange(LowestHealthAuraFilterOptions.Cast<object>().ToArray());
@@ -219,7 +253,9 @@ public sealed class UnitEditorForm : Form
         _dispelTypeBox.Items.AddRange(DispelTypeOptions.Cast<object>().ToArray());
         _dispelTypeBox.SelectedIndex = 0;
 
+        _thresholdModeRow = BuildLabeledRow("阈值类型", _thresholdModeBox);
         _thresholdRow = BuildLabeledRow("血量阈值 (<)", _thresholdBox);
+        _thresholdFieldRow = BuildLabeledRow("动态阈值", _thresholdFieldBox);
         _lowestHealthAuraFilterRow = BuildLabeledRow("光环筛选", _lowestHealthAuraFilterBox);
         _roleRow = BuildLabeledRow("职责", _roleBox);
         _reverseRow = BuildLabeledRow(string.Empty, _reverseBox);
@@ -228,7 +264,7 @@ public sealed class UnitEditorForm : Form
         _auraCountRow = BuildLabeledRow("光环值", _auraCountBox);
         _dispelRow = BuildLabeledRow("驱散类型", _dispelTypeBox);
 
-        _paramPanel.Controls.AddRange([_thresholdRow, _lowestHealthAuraFilterRow, _roleRow, _reverseRow, _auraRow, _aurasRow, _auraCountRow, _dispelRow]);
+        _paramPanel.Controls.AddRange([_thresholdModeRow, _thresholdRow, _thresholdFieldRow, _lowestHealthAuraFilterRow, _roleRow, _reverseRow, _auraRow, _aurasRow, _auraCountRow, _dispelRow]);
     }
 
     private Control BuildActionRow()
@@ -356,7 +392,10 @@ public sealed class UnitEditorForm : Form
             }
         }
 
-        _thresholdRow.Visible = threshold;
+        var dynamicThreshold = IsDynamicThresholdMode();
+        _thresholdModeRow.Visible = threshold;
+        _thresholdRow.Visible = threshold && !dynamicThreshold;
+        _thresholdFieldRow.Visible = threshold && dynamicThreshold;
         _lowestHealthAuraFilterRow.Visible = lowestHealthAuraFilter;
         _roleRow.Visible = role;
         _reverseRow.Visible = reverse;
@@ -379,6 +418,7 @@ public sealed class UnitEditorForm : Form
                 _thresholdBox.Value = Clamp(th, _thresholdBox);
             }
 
+            SeedThresholdField(count.HealthThresholdField);
             SelectAura(_auraBox, count.AuraName);
             return;
         }
@@ -396,6 +436,7 @@ public sealed class UnitEditorForm : Form
                 _thresholdBox.Value = Clamp(th, _thresholdBox);
             }
 
+            SeedThresholdField(unit.HealthThresholdField);
             if (unit.Role is { } r)
             {
                 SelectRole(r);
@@ -432,10 +473,18 @@ public sealed class UnitEditorForm : Form
             switch (kind)
             {
                 case CountKind.UnitsBelowHealth:
-                    count.HealthThreshold = (int)_thresholdBox.Value;
+                    if (!ApplyThreshold(count))
+                    {
+                        return;
+                    }
+
                     break;
                 case CountKind.UnitsWithoutAuraBelowHealth:
-                    count.HealthThreshold = (int)_thresholdBox.Value;
+                    if (!ApplyThreshold(count))
+                    {
+                        return;
+                    }
+
                     count.AuraName = SelectedAura();
                     break;
                 case CountKind.UnitsWithAura:
@@ -459,7 +508,11 @@ public sealed class UnitEditorForm : Form
         switch (selectorKind)
         {
             case UnitSelectorKind.LowestHealth:
-                moduleUnit.HealthThreshold = (int)_thresholdBox.Value;
+                if (!ApplyThreshold(moduleUnit))
+                {
+                    return;
+                }
+
                 switch (SelectedLowestHealthAuraFilter())
                 {
                     case LowestHealthAuraFilterKind.WithAnyAura:
@@ -489,7 +542,11 @@ public sealed class UnitEditorForm : Form
 
                 break;
             case UnitSelectorKind.LowestHealthWithAnyAura:
-                moduleUnit.HealthThreshold = (int)_thresholdBox.Value;
+                if (!ApplyThreshold(moduleUnit))
+                {
+                    return;
+                }
+
                 moduleUnit.AuraNames = CheckedAuras();
                 if (moduleUnit.AuraNames.Count == 0)
                 {
@@ -500,11 +557,19 @@ public sealed class UnitEditorForm : Form
                 break;
             case UnitSelectorKind.LowestHealthWithoutAura:
             case UnitSelectorKind.LowestHealthWithAura:
-                moduleUnit.HealthThreshold = (int)_thresholdBox.Value;
+                if (!ApplyThreshold(moduleUnit))
+                {
+                    return;
+                }
+
                 moduleUnit.AuraNames = SingleAuraList();
                 break;
             case UnitSelectorKind.LowestHealthWithAuraCount:
-                moduleUnit.HealthThreshold = (int)_thresholdBox.Value;
+                if (!ApplyThreshold(moduleUnit))
+                {
+                    return;
+                }
+
                 moduleUnit.AuraNames = SingleAuraList();
                 moduleUnit.AuraCount = (int)_auraCountBox.Value;
                 break;
@@ -583,6 +648,53 @@ public sealed class UnitEditorForm : Form
     }
 
     private bool IsCountCategory => _categoryBox.SelectedIndex == 1;
+
+    private bool IsDynamicThresholdMode()
+        => (_thresholdModeBox.SelectedItem as ThresholdModeItem)?.UsesDynamicField == true;
+
+    private bool ApplyThreshold(ModuleUnit unit)
+    {
+        if (TryReadThreshold(out var fixedValue, out var field))
+        {
+            unit.HealthThreshold = fixedValue;
+            unit.HealthThresholdField = field;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool ApplyThreshold(ModuleCountField count)
+    {
+        if (TryReadThreshold(out var fixedValue, out var field))
+        {
+            count.HealthThreshold = fixedValue;
+            count.HealthThresholdField = field;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryReadThreshold(out int? fixedValue, out string? field)
+    {
+        if (!IsDynamicThresholdMode())
+        {
+            fixedValue = (int)_thresholdBox.Value;
+            field = null;
+            return true;
+        }
+
+        fixedValue = null;
+        field = _thresholdFieldBox.SelectedItem?.ToString()?.Trim();
+        if (!string.IsNullOrWhiteSpace(field))
+        {
+            return true;
+        }
+
+        MessageBox.Show("请选择动态阈值。", "Shigure", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        return false;
+    }
 
     private bool SupportsHealthName()
         => !IsCountCategory
@@ -682,6 +794,44 @@ public sealed class UnitEditorForm : Form
                 return;
             }
         }
+    }
+
+    private void SeedThresholdField(string? field)
+    {
+        if (string.IsNullOrWhiteSpace(field))
+        {
+            SelectThresholdMode(usesDynamicField: false);
+            return;
+        }
+
+        SelectThresholdMode(usesDynamicField: true);
+        SelectThresholdField(field.Trim());
+    }
+
+    private void SelectThresholdMode(bool usesDynamicField)
+    {
+        for (var i = 0; i < _thresholdModeBox.Items.Count; i++)
+        {
+            if (_thresholdModeBox.Items[i] is ThresholdModeItem item && item.UsesDynamicField == usesDynamicField)
+            {
+                _thresholdModeBox.SelectedIndex = i;
+                return;
+            }
+        }
+
+        _thresholdModeBox.SelectedIndex = 0;
+    }
+
+    private void SelectThresholdField(string field)
+    {
+        var index = _thresholdFieldBox.Items.IndexOf(field);
+        if (index < 0)
+        {
+            _thresholdFieldBox.Items.Add(field);
+            index = _thresholdFieldBox.Items.Count - 1;
+        }
+
+        _thresholdFieldBox.SelectedIndex = index;
     }
 
     private void SelectRole(int role)
@@ -846,6 +996,11 @@ public sealed class UnitEditorForm : Form
     }
 
     private sealed record CountItem(string Text, CountKind Kind)
+    {
+        public override string ToString() => Text;
+    }
+
+    private sealed record ThresholdModeItem(string Text, bool UsesDynamicField)
     {
         public override string ToString() => Text;
     }

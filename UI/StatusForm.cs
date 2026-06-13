@@ -72,9 +72,9 @@ public sealed class StatusForm : Form
         _moduleHost = CreatePageHost();
         _aboutHost = CreatePageHost();
 
-        _stateList = UiTheme.CreateListView(Font, ("#", 40), ("名称", 150), ("值", 130));
-        _dynamicUnitList = UiTheme.CreateListView(Font, ("类型", 68), ("名称", 120), ("值", 160));
-        _spellList = UiTheme.CreateListView(Font, ("#", 40), ("技能", 150), ("状态", 110));
+        _stateList = UiTheme.CreateListView(Font, ("#", 56), ("名称", 150), ("值", 130));
+        _dynamicUnitList = UiTheme.CreateListView(Font, ("类型", 86), ("名称", 120), ("值", 160));
+        _spellList = UiTheme.CreateListView(Font, ("#", 56), ("技能", 150), ("状态", 110));
 
         _partyList = UiTheme.CreateListView(Font, ("单位", 110), ("摘要", 700));
         _unitInfoList = UiTheme.CreateListView(Font, ("名称", 200), ("值", 480));
@@ -87,7 +87,7 @@ public sealed class StatusForm : Form
             BackColor = UiTheme.Surface,
             ForeColor = UiTheme.Text,
             BorderStyle = BorderStyle.None,
-            Font = new Font("Consolas", 9F)
+            Font = new Font(Font.FontFamily, 10F, FontStyle.Regular, GraphicsUnit.Point)
         };
 
         var nav = new FlowLayoutPanel

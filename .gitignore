@@ -1,2 +1,8 @@
 cache/
+bin/
+obj/
+artifacts/
+.vs/
+.vscode/
+*.user
 提示词帮助.md

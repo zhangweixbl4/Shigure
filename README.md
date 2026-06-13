@@ -65,32 +65,12 @@ Assets\shigure-emblem-arasaka.ico
 
 ```text
 Shigure.csproj          项目文件，复制 Assets/config/keymap/module 到输出目录
-Program.cs              程序入口，校验 Windows 平台并启动 MainForm
-AppOptions.cs           启动参数解析与发送模式定义
-MainForm.cs             置顶浮动条、运行控制、触发键录入、窗口缓存
-StatusForm.cs           设置与状态诊断窗口（七个页签）
-ShigureRuntime.cs       扫描、状态构建、逻辑运行、按键发送主循环
-PixelScanner.cs         目标窗口像素扫描（顶部行数据与左侧标记行数据）
-StateBuilder.cs         将扫描结果按 config 转换为 GameState
-GameState.cs            运行状态模型（状态字段、spells、group）
-RenderSnapshot.cs       传递给 UI 的不可变状态快照
-ConfigService.cs        读取 config.json 并按职业/专精合并状态配置
-KeymapService.cs        按职业读取并选择 keymap，提供技能到按键的查询
-KeySender.cs            向目标窗口发送按键（支持组合键与鼠标侧键）
-ClassNames.cs           职业、专精、英雄天赋 ID 到名称的映射
-LogicRegistry.cs        模块优先、C# 职业逻辑回退的逻辑调度
-ModuleStore.cs          模块 JSON 存储、匹配、规则执行与条件求值
-ModuleUnit.cs           动态单位 / 数量字段的数据模型与选择器枚举
-UnitSelector.cs         在 group 状态上解析动态单位/数量(移植自 utils.py)
-ModuleEditorControl.cs  模块 UI 编辑器
-ConditionFieldCatalog.cs 从 config.json 构建条件编辑器的字段目录
-ConditionEditorForm.cs  可视化条件编辑弹窗与表达式双向转换
-UnitEditorForm.cs       动态单位 / 数量字段的编辑弹窗
-KeymapCatalog.cs        从职业 keymap 构建技能/目标下拉目录
-UiTheme.cs              深色主题、窗口特效和控件样式
-UiCacheStore.cs         窗口位置/大小与上次触发键的缓存读写
-NativeMethods.cs        Win32 API 互操作声明
-JsonHelpers.cs          JsonNode 取值辅助方法
+App\                    程序入口与启动参数解析
+UI\                     WinForms 界面、编辑器、主题和 UI 缓存
+Runtime\                扫描、状态构建、逻辑运行和运行时快照
+Modules\                模块模型、存储、匹配、规则执行和字段目录
+Input\                  keymap 读取、按键发送和 Win32 API 互操作
+Infrastructure\         配置读取与 JSON 辅助方法
 Assets\                 图标与品牌资源
 keymap\                 各职业按键映射
 module\                 UI 可编辑模块

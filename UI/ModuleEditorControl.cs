@@ -16,6 +16,7 @@ public sealed class ModuleEditorControl : UserControl
     private readonly ComboBox _heroTalentBox = new();
     private readonly DataGridView _rulesGrid = new();
     private readonly DataGridView _adjustmentsGrid = new();
+    private readonly DataGridView _formulaAdjustmentsGrid = new();
     private readonly DataGridViewComboBoxColumn _spellColumn = new();
     private readonly DataGridViewComboBoxColumn _unitColumn = new();
     private readonly DataGridViewComboBoxColumn _adjustmentFieldColumn = new();
@@ -286,7 +287,7 @@ public sealed class ModuleEditorControl : UserControl
             Dock = DockStyle.Fill,
             BackColor = UiTheme.SurfaceRaised,
             ColumnCount = 1,
-            RowCount = showTitle ? 2 : 1,
+            RowCount = showTitle ? 5 : 4,
             Padding = new Padding(10),
             Margin = showTitle ? new Padding(0, 2, 0, 4) : new Padding(0)
         };
@@ -294,7 +295,6 @@ public sealed class ModuleEditorControl : UserControl
         if (showTitle)
         {
             panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             panel.Controls.Add(new Label
             {
                 Text = "动态数值编辑器",
@@ -303,13 +303,18 @@ public sealed class ModuleEditorControl : UserControl
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoEllipsis = true
             }, 0, 0);
-            panel.Controls.Add(BuildAdjustmentsGrid(), 0, 1);
         }
-        else
-        {
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            panel.Controls.Add(BuildAdjustmentsGrid(), 0, 0);
-        }
+
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+
+        var offset = showTitle ? 1 : 0;
+        panel.Controls.Add(CreateSectionLabel("条件动态数值"), 0, offset);
+        panel.Controls.Add(BuildAdjustmentsGrid(), 0, offset + 1);
+        panel.Controls.Add(CreateSectionLabel("公式动态数值"), 0, offset + 2);
+        panel.Controls.Add(BuildFormulaAdjustmentsGrid(), 0, offset + 3);
 
         return panel;
     }
@@ -386,7 +391,7 @@ public sealed class ModuleEditorControl : UserControl
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         }
 
-        foreach (var column in new[] { ("名称", 210), ("类型", 50), ("摘要", 160) })
+        foreach (var column in new[] { ("名称", 210), ("类型", 80), ("摘要", 160) })
         {
             _unitsList.Columns.Add(column.Item1, column.Item2);
         }
@@ -518,13 +523,13 @@ public sealed class ModuleEditorControl : UserControl
         {
             Name = "Enabled",
             HeaderText = "启用",
-            Width = 70,
+            Width = 100,
             AutoSizeMode = DataGridViewAutoSizeColumnMode.None
         });
 
         _adjustmentFieldColumn.Name = "Field";
         _adjustmentFieldColumn.HeaderText = "数值";
-        _adjustmentFieldColumn.Width = 190;
+        _adjustmentFieldColumn.Width = 160;
         _adjustmentFieldColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
         _adjustmentFieldColumn.FlatStyle = FlatStyle.Flat;
         _adjustmentsGrid.Columns.Add(_adjustmentFieldColumn);
@@ -533,7 +538,7 @@ public sealed class ModuleEditorControl : UserControl
         {
             Name = "Delta",
             HeaderText = "调整",
-            Width = 80,
+            Width = 70,
             AutoSizeMode = DataGridViewAutoSizeColumnMode.None
         });
         _adjustmentsGrid.Columns.Add(new DataGridViewTextBoxColumn
@@ -561,7 +566,9 @@ public sealed class ModuleEditorControl : UserControl
         _adjustmentsGrid.Columns["Delete"]!.DefaultCellStyle.ForeColor = UiTheme.Danger;
         _adjustmentsGrid.CellClick += OnAdjustmentsGridCellClick;
         _adjustmentsGrid.CellPainting += OnAdjustmentsGridCellPainting;
+        _adjustmentsGrid.CellValidating += OnAdjustmentsGridCellValidating;
         _adjustmentsGrid.DataError += (_, e) => e.ThrowException = false;
+        _adjustmentsGrid.EditingControlShowing += OnAdjustmentsGridEditingControlShowing;
         _adjustmentsGrid.CurrentCellDirtyStateChanged += (_, _) =>
         {
             if (_adjustmentsGrid.IsCurrentCellDirty && _adjustmentsGrid.CurrentCell is DataGridViewComboBoxCell or DataGridViewCheckBoxCell)
@@ -571,6 +578,70 @@ public sealed class ModuleEditorControl : UserControl
         };
         RefreshAdjustmentFieldColumn();
         return _adjustmentsGrid;
+    }
+
+    private Control BuildFormulaAdjustmentsGrid()
+    {
+        UiTheme.StyleDataGridView(_formulaAdjustmentsGrid);
+        _formulaAdjustmentsGrid.AllowUserToAddRows = true;
+        _formulaAdjustmentsGrid.AllowUserToDeleteRows = true;
+        _formulaAdjustmentsGrid.AllowUserToResizeColumns = true;
+        _formulaAdjustmentsGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+
+        _formulaAdjustmentsGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "Enabled",
+            HeaderText = "启用",
+            Width = 86,
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+        });
+
+        _formulaAdjustmentsGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "Field",
+            HeaderText = "数值名称",
+            Width = 180,
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+        });
+
+        _formulaAdjustmentsGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "Formula",
+            HeaderText = "公式 (点击编辑)",
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
+            ReadOnly = true
+        });
+        _formulaAdjustmentsGrid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "Delete",
+            HeaderText = string.Empty,
+            Text = "×",
+            ToolTipText = "删除",
+            UseColumnTextForButtonValue = true,
+            Width = 32,
+            MinimumWidth = 32,
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
+            Resizable = DataGridViewTriState.False,
+            FlatStyle = FlatStyle.Flat
+        });
+
+        _formulaAdjustmentsGrid.Columns["Delete"]!.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+        _formulaAdjustmentsGrid.Columns["Delete"]!.DefaultCellStyle.ForeColor = UiTheme.Danger;
+        _formulaAdjustmentsGrid.CellClick += OnFormulaAdjustmentsGridCellClick;
+        _formulaAdjustmentsGrid.CellPainting += OnFormulaAdjustmentsGridCellPainting;
+        _formulaAdjustmentsGrid.CellEndEdit += OnFormulaAdjustmentsGridCellEndEdit;
+        _formulaAdjustmentsGrid.DataError += (_, e) => e.ThrowException = false;
+        _formulaAdjustmentsGrid.UserDeletedRow += (_, _) => RefreshAdjustmentFieldColumn();
+        _formulaAdjustmentsGrid.CurrentCellDirtyStateChanged += (_, _) =>
+        {
+            if (_formulaAdjustmentsGrid.IsCurrentCellDirty
+                && _formulaAdjustmentsGrid.CurrentCell is DataGridViewCheckBoxCell)
+            {
+                _formulaAdjustmentsGrid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            }
+        };
+        RefreshAdjustmentFieldColumn();
+        return _formulaAdjustmentsGrid;
     }
 
     private Control BuildRulesGrid()
@@ -587,7 +658,7 @@ public sealed class ModuleEditorControl : UserControl
         {
             Name = "Enabled",
             HeaderText = "启用",
-            Width = 100,
+            Width = 120,
             AutoSizeMode = DataGridViewAutoSizeColumnMode.None
         });
         _spellColumn.Name = "Spell";
@@ -815,6 +886,14 @@ public sealed class ModuleEditorControl : UserControl
                 EnsureComboItem(_adjustmentFieldColumn, row.Cells["Field"].Value);
             }
         }
+
+        foreach (DataGridViewRow row in _formulaAdjustmentsGrid.Rows)
+        {
+            if (!row.IsNewRow)
+            {
+                EnsureComboItem(_adjustmentFieldColumn, row.Cells["Field"].Value);
+            }
+        }
     }
 
     private IReadOnlyList<ConditionField> BuildAdjustmentFields()
@@ -827,6 +906,11 @@ public sealed class ModuleEditorControl : UserControl
             {
                 AddAdjustmentField(fields, seen, field.Name, field.DisplayName, ConditionFieldCategory.State);
             }
+        }
+
+        foreach (var fieldName in GetAdjustmentTargetFields())
+        {
+            AddAdjustmentField(fields, seen, fieldName, $"{fieldName} (动态数值)", ConditionFieldCategory.State);
         }
 
         foreach (var unit in _units)
@@ -848,6 +932,47 @@ public sealed class ModuleEditorControl : UserControl
         return fields;
     }
 
+    private IEnumerable<string> GetAdjustmentTargetFields()
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (DataGridViewRow row in _adjustmentsGrid.Rows)
+        {
+            if (row.IsNewRow)
+            {
+                continue;
+            }
+
+            if (TryGetAdjustmentField(CellText(row, "Field"), null, out var field) && seen.Add(field))
+            {
+                yield return field;
+            }
+        }
+
+        foreach (DataGridViewRow row in _formulaAdjustmentsGrid.Rows)
+        {
+            if (row.IsNewRow)
+            {
+                continue;
+            }
+
+            if (TryGetAdjustmentField(CellText(row, "Field"), CellText(row, "Formula"), out var field) && seen.Add(field))
+            {
+                yield return field;
+            }
+        }
+    }
+
+    private static bool TryGetAdjustmentField(string? fieldText, string? formulaText, out string field)
+    {
+        field = fieldText?.Trim() ?? string.Empty;
+        if (field.Length > 0)
+        {
+            return true;
+        }
+
+        return FormulaEvaluator.TrySplitAssignment(formulaText, out field, out _);
+    }
+
     private static void AddAdjustmentField(
         List<ConditionField> fields,
         HashSet<string> seen,
@@ -865,7 +990,7 @@ public sealed class ModuleEditorControl : UserControl
 
     private void AddUnit()
     {
-        using var editor = new UnitEditorForm(GetAuraFields(), CollectTakenNames(), null, null);
+        using var editor = new UnitEditorForm(GetAuraFields(), GetThresholdFields(), CollectTakenNames(), null, null);
         if (editor.ShowDialog(FindForm()) != DialogResult.OK)
         {
             return;
@@ -898,7 +1023,7 @@ public sealed class ModuleEditorControl : UserControl
         var ownName = existingUnit?.Name ?? existingCount?.Name;
         var ownHealthName = existingUnit?.HealthName;
 
-        using var editor = new UnitEditorForm(GetAuraFields(), CollectTakenNames(ownName, ownHealthName), existingUnit, existingCount);
+        using var editor = new UnitEditorForm(GetAuraFields(), GetThresholdFields(), CollectTakenNames(ownName, ownHealthName), existingUnit, existingCount);
         if (editor.ShowDialog(FindForm()) != DialogResult.OK)
         {
             return;
@@ -1007,6 +1132,14 @@ public sealed class ModuleEditorControl : UserControl
             .ToList();
     }
 
+    private IReadOnlyList<string> GetThresholdFields()
+    {
+        return BuildAdjustmentFields()
+            .Select(field => field.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList();
+    }
+
     // 名称查重集合: 其它单位/数量(含生命值名) + 当前职业/专精的状态字段与 group 字段; 排除正在编辑项自身的名称。
     private IReadOnlyCollection<string> CollectTakenNames(params string?[] ownNames)
     {
@@ -1051,7 +1184,7 @@ public sealed class ModuleEditorControl : UserControl
 
     private static string DescribeUnit(ModuleUnit unit)
     {
-        var threshold = unit.HealthThreshold ?? 100;
+        var threshold = DescribeThreshold(unit.HealthThreshold, unit.HealthThresholdField);
         var aura = unit.AuraNames is { Count: > 0 } ? unit.AuraNames[0] : "?";
         var auras = unit.AuraNames is { Count: > 0 } ? string.Join("/", unit.AuraNames) : "?";
         var dir = unit.Reverse ? "逆序" : "正序";
@@ -1072,7 +1205,7 @@ public sealed class ModuleEditorControl : UserControl
 
     private static string DescribeCount(ModuleCountField count)
     {
-        var threshold = count.HealthThreshold ?? 100;
+        var threshold = DescribeThreshold(count.HealthThreshold, count.HealthThresholdField);
         return count.Kind switch
         {
             CountKind.UnitsBelowHealth => $"血量<{threshold} 的人数",
@@ -1080,6 +1213,13 @@ public sealed class ModuleEditorControl : UserControl
             CountKind.UnitsWithAura => $"带[{count.AuraName}] 的人数",
             _ => count.Kind.ToString()
         };
+    }
+
+    private static string DescribeThreshold(int? fixedValue, string? field)
+    {
+        return string.IsNullOrWhiteSpace(field)
+            ? (fixedValue ?? 100).ToString()
+            : $"动态:{field.Trim()}";
     }
 
     private enum UnitRowKind
@@ -1270,6 +1410,21 @@ public sealed class ModuleEditorControl : UserControl
         PaintGridIconCell(_adjustmentsGrid, e, "×", UiTheme.Danger);
     }
 
+    private void OnFormulaAdjustmentsGridCellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex < 0)
+        {
+            return;
+        }
+
+        if (_formulaAdjustmentsGrid.Columns[e.ColumnIndex].Name != "Delete")
+        {
+            return;
+        }
+
+        PaintGridIconCell(_formulaAdjustmentsGrid, e, "×", UiTheme.Danger);
+    }
+
     private static void PaintGridIconCell(DataGridView grid, DataGridViewCellPaintingEventArgs e, string icon, Color color)
     {
         e.Paint(e.CellBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.Border);
@@ -1332,6 +1487,70 @@ public sealed class ModuleEditorControl : UserControl
         }
     }
 
+    private void OnFormulaAdjustmentsGridCellClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex < 0)
+        {
+            return;
+        }
+
+        var columnName = _formulaAdjustmentsGrid.Columns[e.ColumnIndex].Name;
+        if (columnName == "Delete")
+        {
+            var row = _formulaAdjustmentsGrid.Rows[e.RowIndex];
+            if (!row.IsNewRow)
+            {
+                _formulaAdjustmentsGrid.Rows.RemoveAt(e.RowIndex);
+                RefreshAdjustmentFieldColumn();
+            }
+
+            return;
+        }
+
+        if (columnName == "Formula")
+        {
+            OpenFormulaEditor(e.RowIndex);
+        }
+    }
+
+    private void OnFormulaAdjustmentsGridCellEndEdit(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex < 0)
+        {
+            return;
+        }
+
+        if (_formulaAdjustmentsGrid.Columns[e.ColumnIndex].Name == "Field")
+        {
+            RefreshAdjustmentFieldColumn();
+        }
+    }
+
+    private void OnAdjustmentsGridEditingControlShowing(object? sender, DataGridViewEditingControlShowingEventArgs e)
+    {
+        if (_adjustmentsGrid.CurrentCell?.OwningColumn?.Name != "Field" || e.Control is not ComboBox comboBox)
+        {
+            return;
+        }
+
+        comboBox.DropDownStyle = ComboBoxStyle.DropDown;
+        comboBox.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
+        comboBox.AutoCompleteSource = AutoCompleteSource.ListItems;
+    }
+
+    private void OnAdjustmentsGridCellValidating(object? sender, DataGridViewCellValidatingEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex < 0)
+        {
+            return;
+        }
+
+        if (_adjustmentsGrid.Columns[e.ColumnIndex].Name == "Field")
+        {
+            EnsureComboItem(_adjustmentFieldColumn, e.FormattedValue);
+        }
+    }
+
     private void OpenAdjustmentConditionEditor(int rowIndex)
     {
         var row = _adjustmentsGrid.Rows[rowIndex];
@@ -1354,6 +1573,64 @@ public sealed class ModuleEditorControl : UserControl
         }
 
         row.Cells["Condition"].Value = editor.ConditionText;
+    }
+
+    private void OpenFormulaEditor(int rowIndex)
+    {
+        var row = _formulaAdjustmentsGrid.Rows[rowIndex];
+        var current = row.IsNewRow ? string.Empty : CellText(row, "Formula");
+
+        using var editor = new FormulaEditorForm(current);
+        if (editor.ShowDialog(FindForm()) != DialogResult.OK)
+        {
+            return;
+        }
+
+        var field = row.IsNewRow ? string.Empty : CellText(row, "Field");
+        var formula = editor.FormulaText;
+        if (FormulaEvaluator.TrySplitAssignment(formula, out var formulaField, out var normalizedFormula))
+        {
+            if (string.IsNullOrWhiteSpace(field))
+            {
+                field = formulaField;
+            }
+
+            formula = normalizedFormula;
+        }
+        else
+        {
+            formula = FormulaEvaluator.NormalizeExpression(formula);
+        }
+
+        if (string.IsNullOrWhiteSpace(field) && !string.IsNullOrWhiteSpace(formula))
+        {
+            MessageBox.Show(
+                "请先填写公式动态数值的“数值名称”，或在公式中写成“名称 = 表达式”。",
+                "Shigure",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+
+        if (row.IsNewRow)
+        {
+            if (!string.IsNullOrWhiteSpace(field) || !string.IsNullOrWhiteSpace(formula))
+            {
+                _formulaAdjustmentsGrid.Rows.Add(true, field, formula);
+                EnsureComboItem(_adjustmentFieldColumn, field);
+                RefreshAdjustmentFieldColumn();
+            }
+
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(field))
+        {
+            row.Cells["Field"].Value = field;
+            EnsureComboItem(_adjustmentFieldColumn, field);
+        }
+
+        row.Cells["Formula"].Value = formula;
+        RefreshAdjustmentFieldColumn();
     }
 
     private void DeleteRule(int rowIndex)
@@ -1489,6 +1766,15 @@ public sealed class ModuleEditorControl : UserControl
         var classId = ReadMatchCombo(_classBox);
         var specId = ReadMatchCombo(_specBox);
         var fields = new List<ConditionField>(_fieldCatalog.GetFields(classId, specId));
+        var seen = new HashSet<string>(fields.Select(field => field.Name), StringComparer.Ordinal);
+
+        foreach (var fieldName in GetAdjustmentTargetFields())
+        {
+            if (seen.Add(fieldName))
+            {
+                fields.Add(new ConditionField(fieldName, $"{fieldName} (动态数值)", ConditionFieldType.Int, ConditionFieldCategory.State));
+            }
+        }
 
         foreach (var unit in _units)
         {
@@ -1498,10 +1784,13 @@ public sealed class ModuleEditorControl : UserControl
             }
 
             // 裸单位名作为存在性布尔。
-            fields.Add(new ConditionField(unit.Name, $"{unit.Name} (存在)", ConditionFieldType.Bool, ConditionFieldCategory.DynamicUnit));
+            if (seen.Add(unit.Name))
+            {
+                fields.Add(new ConditionField(unit.Name, $"{unit.Name} (存在)", ConditionFieldType.Bool, ConditionFieldCategory.DynamicUnit));
+            }
 
             // 值名称: 该单位 生命值 的直接命名数值字段。
-            if (!string.IsNullOrWhiteSpace(unit.HealthName))
+            if (!string.IsNullOrWhiteSpace(unit.HealthName) && seen.Add(unit.HealthName))
             {
                 fields.Add(new ConditionField(unit.HealthName, $"{unit.HealthName} (生命值)", ConditionFieldType.Int, ConditionFieldCategory.DynamicUnit));
             }
@@ -1509,7 +1798,7 @@ public sealed class ModuleEditorControl : UserControl
 
         foreach (var count in _counts)
         {
-            if (!string.IsNullOrWhiteSpace(count.Name))
+            if (!string.IsNullOrWhiteSpace(count.Name) && seen.Add(count.Name))
             {
                 fields.Add(new ConditionField(count.Name, $"人数: {count.Name}", ConditionFieldType.Int, ConditionFieldCategory.DynamicUnit));
             }
@@ -1614,12 +1903,25 @@ public sealed class ModuleEditorControl : UserControl
         SelectHeroTalent(module.Match.HeroTalent);
         _pathLabel.Text = module.FilePath ?? "尚未保存";
         _adjustmentsGrid.Rows.Clear();
+        _formulaAdjustmentsGrid.Rows.Clear();
         RefreshAdjustmentFieldColumn();
         foreach (var adjustment in _valueAdjustments)
         {
-            EnsureComboItem(_adjustmentFieldColumn, adjustment.Field);
-            _adjustmentsGrid.Rows.Add(adjustment.Enabled, adjustment.Field, adjustment.Delta, adjustment.Condition);
+            if (string.IsNullOrWhiteSpace(adjustment.Formula))
+            {
+                EnsureComboItem(_adjustmentFieldColumn, adjustment.Field);
+                _adjustmentsGrid.Rows.Add(adjustment.Enabled, adjustment.Field, adjustment.Delta, adjustment.Condition);
+            }
+            else
+            {
+                _formulaAdjustmentsGrid.Rows.Add(
+                    adjustment.Enabled,
+                    adjustment.Field,
+                    FormulaEvaluator.NormalizeExpression(adjustment.Formula));
+            }
         }
+
+        RefreshAdjustmentFieldColumn();
 
         _rulesGrid.Rows.Clear();
         RefreshKeymapColumns();
@@ -1652,6 +1954,7 @@ public sealed class ModuleEditorControl : UserControl
         SelectHeroTalent(null);
         _pathLabel.Text = "无模块";
         _adjustmentsGrid.Rows.Clear();
+        _formulaAdjustmentsGrid.Rows.Clear();
         RefreshAdjustmentFieldColumn();
         _rulesGrid.Rows.Clear();
     }
@@ -1748,14 +2051,22 @@ public sealed class ModuleEditorControl : UserControl
 
         module.Units = _units.Select(unit => unit.Clone()).ToList();
         module.Counts = _counts.Select(count => count.Clone()).ToList();
-        module.ValueAdjustments = ReadValueAdjustments();
+        if (!TryReadValueAdjustments(out var valueAdjustments, out var adjustmentError))
+        {
+            MessageBox.Show(adjustmentError, "Shigure", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+
+        module.ValueAdjustments = valueAdjustments;
         module.Rules = ReadRules();
         return true;
     }
 
-    private List<ModuleValueAdjustment> ReadValueAdjustments()
+    private bool TryReadValueAdjustments(out List<ModuleValueAdjustment> adjustments, out string error)
     {
-        var adjustments = new List<ModuleValueAdjustment>();
+        adjustments = new List<ModuleValueAdjustment>();
+        error = string.Empty;
+
         foreach (DataGridViewRow row in _adjustmentsGrid.Rows)
         {
             if (row.IsNewRow)
@@ -1783,11 +2094,56 @@ public sealed class ModuleEditorControl : UserControl
                 Enabled = CellBool(row, "Enabled", defaultValue: true),
                 Field = field,
                 Delta = delta,
+                Formula = string.Empty,
                 Condition = condition
             });
         }
 
-        return adjustments;
+        foreach (DataGridViewRow row in _formulaAdjustmentsGrid.Rows)
+        {
+            if (row.IsNewRow)
+            {
+                continue;
+            }
+
+            var field = CellText(row, "Field");
+            var formula = CellText(row, "Formula");
+            if (string.IsNullOrWhiteSpace(field)
+                && FormulaEvaluator.TrySplitAssignment(formula, out var formulaField, out var normalizedFormula))
+            {
+                field = formulaField;
+                formula = normalizedFormula;
+            }
+            else
+            {
+                formula = FormulaEvaluator.NormalizeExpression(formula);
+            }
+
+            if (string.IsNullOrWhiteSpace(field) && string.IsNullOrWhiteSpace(formula))
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(field) || string.IsNullOrWhiteSpace(formula))
+            {
+                var rowNumber = row.Index + 1;
+                error = string.IsNullOrWhiteSpace(field)
+                    ? $"公式动态数值第 {rowNumber} 行缺少数值名称。请在“数值名称”里输入名称，或把公式写成“名称 = 表达式”。"
+                    : $"公式动态数值第 {rowNumber} 行缺少公式。";
+                return false;
+            }
+
+            adjustments.Add(new ModuleValueAdjustment
+            {
+                Enabled = CellBool(row, "Enabled", defaultValue: true),
+                Field = field,
+                Delta = 0,
+                Formula = formula,
+                Condition = string.Empty
+            });
+        }
+
+        return true;
     }
 
     private List<ModuleRule> ReadRules()
@@ -1855,6 +2211,19 @@ public sealed class ModuleEditorControl : UserControl
             ForeColor = UiTheme.Muted,
             TextAlign = ContentAlignment.MiddleLeft,
             AutoEllipsis = true
+        };
+    }
+
+    private static Label CreateSectionLabel(string text)
+    {
+        return new Label
+        {
+            Text = text,
+            Dock = DockStyle.Fill,
+            ForeColor = UiTheme.Muted,
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
+            Padding = new Padding(0, 2, 0, 0)
         };
     }
 

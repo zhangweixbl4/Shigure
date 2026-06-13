@@ -263,6 +263,15 @@ public sealed class ShigureRuntime
             }
         }
 
+        if (state.Values.TryGetValue("$dynamicvalues", out var dynamicObj)
+            && dynamicObj is IReadOnlyDictionary<string, object?> dynamicValues)
+        {
+            foreach (var (name, value) in dynamicValues.OrderBy(kv => kv.Key, StringComparer.CurrentCultureIgnoreCase))
+            {
+                values.Add(new DynamicValueSnapshot("动态值", name, FormatSnapshotValue(value)));
+            }
+        }
+
         return values;
     }
 

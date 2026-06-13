@@ -49,6 +49,7 @@ public sealed class ModuleUnit
 
     public UnitSelectorKind Kind { get; set; } = UnitSelectorKind.LowestHealth;
     public int? HealthThreshold { get; set; }
+    public string? HealthThresholdField { get; set; }
     public int? Role { get; set; }
     public bool Reverse { get; set; }
     public List<string>? AuraNames { get; set; }
@@ -63,6 +64,7 @@ public sealed class ModuleUnit
             HealthName = HealthName,
             Kind = Kind,
             HealthThreshold = HealthThreshold,
+            HealthThresholdField = HealthThresholdField,
             Role = Role,
             Reverse = Reverse,
             AuraNames = AuraNames is null ? null : new List<string>(AuraNames),
@@ -95,6 +97,7 @@ public sealed class ModuleCountField
     public string Name { get; set; } = string.Empty;
     public CountKind Kind { get; set; } = CountKind.UnitsBelowHealth;
     public int? HealthThreshold { get; set; }
+    public string? HealthThresholdField { get; set; }
     public string? AuraName { get; set; }
 
     public ModuleCountField Clone()
@@ -104,6 +107,7 @@ public sealed class ModuleCountField
             Name = Name,
             Kind = Kind,
             HealthThreshold = HealthThreshold,
+            HealthThresholdField = HealthThresholdField,
             AuraName = AuraName
         };
     }
