@@ -24,8 +24,7 @@ public sealed class KeymapCatalog
     {
         try
         {
-            var configPath = Path.Combine(baseDirectory, "config.json");
-            return new KeymapCatalog(baseDirectory, new ConfigService(configPath));
+            return new KeymapCatalog(baseDirectory, ConfigService.LoadFromBaseDirectory(baseDirectory));
         }
         catch
         {

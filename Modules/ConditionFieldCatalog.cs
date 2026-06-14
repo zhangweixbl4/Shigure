@@ -26,7 +26,7 @@ public sealed record ConditionField(
 }
 
 /// <summary>
-/// 从 config.json 构建可在条件编辑器中选择的字段目录。
+/// 从 config 目录构建可在条件编辑器中选择的字段目录。
 /// 字段按模块当前选中的职业/专精过滤；group 队伍字段暂不收录。
 /// </summary>
 public sealed class ConditionFieldCatalog
@@ -42,8 +42,7 @@ public sealed class ConditionFieldCatalog
     {
         try
         {
-            var configPath = Path.Combine(baseDirectory, "config.json");
-            return new ConditionFieldCatalog(new ConfigService(configPath));
+            return new ConditionFieldCatalog(ConfigService.LoadFromBaseDirectory(baseDirectory));
         }
         catch
         {

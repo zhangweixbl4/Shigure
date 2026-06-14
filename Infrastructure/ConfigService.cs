@@ -5,21 +5,86 @@ namespace Shigure;
 
 public sealed class ConfigService
 {
+    public const string ConfigDirectoryName = "config";
+    public const string CommonConfigFileName = "common.json";
+    public const string LegacyConfigFileName = "config.json";
+
     public JsonObject Root { get; }
 
     public ConfigService(string configPath)
     {
+        Root = LoadRoot(configPath);
+    }
+
+    public static ConfigService LoadFromBaseDirectory(string baseDirectory)
+    {
+        return new ConfigService(ResolveConfigPath(baseDirectory));
+    }
+
+    public static string ResolveConfigPath(string baseDirectory)
+    {
+        var splitConfigPath = Path.Combine(baseDirectory, ConfigDirectoryName);
+        return Directory.Exists(splitConfigPath)
+            ? splitConfigPath
+            : Path.Combine(baseDirectory, LegacyConfigFileName);
+    }
+
+    private static JsonObject LoadRoot(string configPath)
+    {
+        if (Directory.Exists(configPath))
+        {
+            return LoadSplitConfig(configPath);
+        }
+
         if (!File.Exists(configPath))
         {
-            throw new FileNotFoundException("找不到 config.json", configPath);
+            throw new FileNotFoundException("找不到 config 配置", configPath);
         }
 
         var json = File.ReadAllText(configPath);
-        Root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions
+        return ParseObject(json, configPath);
+    }
+
+    private static JsonObject LoadSplitConfig(string configDirectory)
+    {
+        var commonPath = Path.Combine(configDirectory, CommonConfigFileName);
+        if (!File.Exists(commonPath))
+        {
+            throw new FileNotFoundException("找不到公共 config 配置", commonPath);
+        }
+
+        var root = ReadObject(commonPath);
+        foreach (var (classId, className) in ClassNames.GetClasses())
+        {
+            var classPath = Path.Combine(configDirectory, $"{className}.json");
+            if (!File.Exists(classPath))
+            {
+                classPath = Path.Combine(configDirectory, $"{classId}.json");
+            }
+
+            if (!File.Exists(classPath))
+            {
+                throw new FileNotFoundException("找不到职业 config 配置", classPath);
+            }
+
+            root[classId.ToString()] = ReadObject(classPath);
+        }
+
+        return root;
+    }
+
+    private static JsonObject ReadObject(string path)
+    {
+        return ParseObject(File.ReadAllText(path), path);
+    }
+
+    private static JsonObject ParseObject(string json, string path)
+    {
+        return JsonNode.Parse(json, documentOptions: new JsonDocumentOptions
         {
             CommentHandling = JsonCommentHandling.Skip,
             AllowTrailingCommas = true
-        })?.AsObject() ?? throw new InvalidDataException("config.json 不是 JSON 对象。");
+        })?.AsObject() ?? throw new InvalidDataException($"{path} 不是 JSON 对象。");
     }
 
     public JsonObject? GetObject(params string[] path)

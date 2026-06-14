@@ -6,6 +6,24 @@ public sealed class MainForm : Form, IMessageFilter
 {
     private const int ResizeGripSize = 8;
     private const string HeaderIconResourceName = "Shigure.Assets.arasaka-icon-transparent.png";
+    private static readonly Color DefaultHeaderIconColor = Color.White;
+    private static readonly IReadOnlyDictionary<int, Color> ClassIconColors = new Dictionary<int, Color>
+    {
+        [1] = ColorTranslator.FromHtml("#C79C6E"),
+        [2] = ColorTranslator.FromHtml("#F58CBA"),
+        [3] = ColorTranslator.FromHtml("#ABD473"),
+        [4] = ColorTranslator.FromHtml("#FFF569"),
+        [5] = ColorTranslator.FromHtml("#FFFFFF"),
+        [6] = ColorTranslator.FromHtml("#C41F3B"),
+        [7] = ColorTranslator.FromHtml("#0070DE"),
+        [8] = ColorTranslator.FromHtml("#69CCF0"),
+        [9] = ColorTranslator.FromHtml("#9482C9"),
+        [10] = ColorTranslator.FromHtml("#00FF96"),
+        [11] = ColorTranslator.FromHtml("#FF7D0A"),
+        [12] = ColorTranslator.FromHtml("#A330C9"),
+        [13] = ColorTranslator.FromHtml("#33937F")
+    };
+
     private Button _toggleKeyButton = null!;
     private ComboBox _modeComboBox = null!;
     private ComboBox _moduleComboBox = null!;
@@ -20,8 +38,11 @@ public sealed class MainForm : Form, IMessageFilter
 
     private Button _enableButton = null!;
 
+    private PictureBox _headerIcon = null!;
     private Label _titleLabel = null!;
     private Label _runtimeStatusLabel = null!;
+    private Bitmap? _headerIconMask;
+    private Color? _currentHeaderIconColor;
 
     private readonly StatusForm _statusForm;
     private readonly ModuleStore _moduleStore;
@@ -164,7 +185,8 @@ public sealed class MainForm : Form, IMessageFilter
             Padding = new Padding(0)
         };
 
-        var headerIcon = CreateHeaderIcon();
+        _headerIcon = CreateHeaderIcon();
+        UpdateHeaderIconColor(null);
 
         _titleLabel = new Label
         {
@@ -176,7 +198,7 @@ public sealed class MainForm : Form, IMessageFilter
             Margin = new Padding(8, 0, 0, 0)
         };
 
-        brand.Controls.Add(headerIcon);
+        brand.Controls.Add(_headerIcon);
         brand.Controls.Add(_titleLabel);
 
         _runtimeStatusLabel = new Label
@@ -190,7 +212,7 @@ public sealed class MainForm : Form, IMessageFilter
 
         EnableDrag(bar);
         EnableDrag(brand);
-        EnableDrag(headerIcon);
+        EnableDrag(_headerIcon);
         EnableDrag(_titleLabel);
         EnableDrag(_runtimeStatusLabel);
 
@@ -238,14 +260,66 @@ public sealed class MainForm : Form, IMessageFilter
             Anchor = AnchorStyles.Left
         };
 
-        using var stream = typeof(MainForm).Assembly.GetManifestResourceStream(HeaderIconResourceName);
-        if (stream is not null)
+        return box;
+    }
+
+    private void UpdateHeaderIconColor(int? classId)
+    {
+        var color = ResolveClassIconColor(classId);
+        if (_currentHeaderIconColor == color)
         {
-            using var image = Image.FromStream(stream);
-            box.Image = new Bitmap(image);
+            return;
         }
 
-        return box;
+        _currentHeaderIconColor = color;
+        _headerIconMask ??= LoadHeaderIconMask();
+        if (_headerIconMask is null)
+        {
+            return;
+        }
+
+        var previous = _headerIcon.Image;
+        _headerIcon.Image = TintHeaderIcon(_headerIconMask, color);
+        previous?.Dispose();
+    }
+
+    private static Color ResolveClassIconColor(int? classId)
+        => classId is not null && ClassIconColors.TryGetValue(classId.Value, out var color)
+            ? color
+            : DefaultHeaderIconColor;
+
+    private static Bitmap? LoadHeaderIconMask()
+    {
+        using var stream = typeof(MainForm).Assembly.GetManifestResourceStream(HeaderIconResourceName);
+        if (stream is null)
+        {
+            return null;
+        }
+
+        using var image = Image.FromStream(stream);
+        return new Bitmap(image);
+    }
+
+    private static Bitmap TintHeaderIcon(Bitmap mask, Color color)
+    {
+        var bitmap = new Bitmap(mask.Width, mask.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        bitmap.SetResolution(mask.HorizontalResolution, mask.VerticalResolution);
+
+        for (var y = 0; y < mask.Height; y++)
+        {
+            for (var x = 0; x < mask.Width; x++)
+            {
+                var pixel = mask.GetPixel(x, y);
+                if (pixel.A == 0)
+                {
+                    continue;
+                }
+
+                bitmap.SetPixel(x, y, Color.FromArgb(pixel.A, color));
+            }
+        }
+
+        return bitmap;
     }
 
     private Control BuildSettingsPanel()
@@ -567,6 +641,7 @@ public sealed class MainForm : Form, IMessageFilter
     {
         _lastSnapshot = snapshot;
 
+        UpdateHeaderIconColor(snapshot.ClassId);
         UpdateLogicStatusLabel(snapshot.Enabled);
         _enableButton.Text = snapshot.Enabled ? "关闭" : "开启";
 
@@ -764,6 +839,7 @@ public sealed class MainForm : Form, IMessageFilter
     {
         if (!running)
         {
+            UpdateHeaderIconColor(null);
             UpdateLogicStatusLabel(enabled: false);
         }
 

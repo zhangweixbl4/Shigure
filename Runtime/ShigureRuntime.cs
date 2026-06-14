@@ -27,7 +27,7 @@ public sealed class ShigureRuntime
     public ShigureRuntime(string baseDirectory, AppOptions options, ModuleStore moduleStore)
     {
         _options = options;
-        _config = new ConfigService(Path.Combine(baseDirectory, "config.json"));
+        _config = ConfigService.LoadFromBaseDirectory(baseDirectory);
         _keymap = new KeymapService(baseDirectory, _config);
         _scanner = new PixelScanner(options.WindowTitle);
         _stateBuilder = new StateBuilder(_config);

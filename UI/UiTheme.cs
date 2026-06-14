@@ -27,7 +27,7 @@ internal static class UiTheme
     public static readonly Color RowAlt = Color.FromArgb(25, 29, 35);
     public static readonly Color Text = Color.FromArgb(225, 229, 235);
     public static readonly Color Muted = Color.FromArgb(128, 136, 148);
-    public static readonly Color Accent = Color.FromArgb(86, 205, 192);
+    public static readonly Color Accent = Color.FromArgb(0, 255, 255);
     public static readonly Color Danger = Color.FromArgb(235, 108, 108);
 
     [DllImport("dwmapi.dll")]
@@ -169,8 +169,8 @@ internal static class UiTheme
         };
         button.FlatAppearance.BorderSize = 1;
         button.FlatAppearance.BorderColor = backColor == Accent ? Accent : Border;
-        button.FlatAppearance.MouseOverBackColor = backColor == Accent ? Color.FromArgb(103, 224, 211) : Hover;
-        button.FlatAppearance.MouseDownBackColor = backColor == Accent ? Color.FromArgb(70, 181, 170) : Pressed;
+        button.FlatAppearance.MouseOverBackColor = backColor == Accent ? Color.FromArgb(134, 248, 231) : Hover;
+        button.FlatAppearance.MouseDownBackColor = backColor == Accent ? Color.FromArgb(82, 211, 195) : Pressed;
         return button;
     }
 
